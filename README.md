@@ -8,6 +8,23 @@ Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea). It shells o
 to the `git` CLI for every operation (no Git protocol reimplementation) and does
 **not** talk to GitHub/GitLab or any remote host.
 
+## Layout
+
+![gui — staged, unstaged and untracked changes as a folder tree, beside the diff pane](docs/example.png)
+
+- **Header** shows the current branch, ahead/behind vs. upstream (when configured),
+  the `origin` identity (`owner/repo` or host) when a remote exists, and the repo path.
+- **File list** groups changes into **Staged**, **Unstaged**, and **Untracked**, with
+  status glyphs `A`/`M`/`D`/`R`/`?`/`C`/`U`. Renames render as `orig → new`.
+  Within each group, files are shown as a **folder tree**: single-child directory
+  chains are **compacted** onto one line (`internal/ui/diffview/`), folders can be
+  **collapsed/expanded** (`h`/`l`/`Enter`, or click), and `.` toggles a **flat**
+  view of full relative paths. Long names wrap to stay readable; the list scrolls
+  to keep the selection visible.
+- **Diff pane** shows the unified diff of the selected file (`+` green, `−` red,
+  `@@` cyan) in a scrollable viewport.
+- A clean tree shows a friendly *"nothing to commit, working tree clean"* message.
+
 ## Install / run
 
 ```sh
@@ -47,31 +64,6 @@ binary onto your `PATH` first (`go install .`), then with **lazy.nvim**:
 `:Gui` opens the TUI in a centered float; `q` closes it and refreshes your
 buffers. See [`contrib/nvim/README.md`](contrib/nvim/README.md) for manual
 installation and configuration options.
-
-## Layout
-
-```
-┌ origin/main · feature ↑2↓1 · owner/repo · /path/to/project   ← header (FR-1)
-│ Unstaged (3)                  │ <unified diff of the           ← file tree (FR-2)
-│ ▾ internal/ui/                │  selected file, colorized>       beside the
-│ │   M app.go                  │                                  scrollable
-│ ▸ internal/git/ (2)           │                                  diff pane
-│   M README.md                 │                               █  ← scrollbar
-└ j/k move · enter open · h/l fold · . flat · … ← toast / hint footer
-```
-
-- **Header** shows the current branch, ahead/behind vs. upstream (when configured),
-  the `origin` identity (`owner/repo` or host) when a remote exists, and the repo path.
-- **File list** groups changes into **Staged**, **Unstaged**, and **Untracked**, with
-  status glyphs `A`/`M`/`D`/`R`/`?`/`C`/`U`. Renames render as `orig → new`.
-  Within each group, files are shown as a **folder tree**: single-child directory
-  chains are **compacted** onto one line (`internal/ui/diffview/`), folders can be
-  **collapsed/expanded** (`h`/`l`/`Enter`, or click), and `.` toggles a **flat**
-  view of full relative paths. Long names wrap to stay readable; the list scrolls
-  to keep the selection visible.
-- **Diff pane** shows the unified diff of the selected file (`+` green, `−` red,
-  `@@` cyan) in a scrollable viewport.
-- A clean tree shows a friendly *"nothing to commit, working tree clean"* message.
 
 ## Keymap
 
