@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -553,6 +554,210 @@ func TestRebase(t *testing.T) {
 	// After a clean rebase, base.txt (from main) should now exist on topic.
 	if _, err := os.Stat(filepath.Join(dir, "base.txt")); err != nil {
 		t.Errorf("base.txt missing after rebase: %v", err)
+	}
+}
+
+// multiHunkContent returns a 20-line file body for hunk-level fixtures.
+func multiHunkContent(lines ...string) string {
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// makeMultiHunkRepo builds a repo whose keep.txt has two separated modified
+// regions, returning the service and the unstaged diff for keep.txt.
+func makeMultiHunkRepo(t *testing.T) (*Service, string) {
+	t.Helper()
+	dir := newRepo(t)
+	// Commit a long file so two edits are far enough apart to be distinct hunks.
+	base := multiHunkContent(
+		"line01", "line02", "line03", "line04", "line05",
+		"line06", "line07", "line08", "line09", "line10",
+		"line11", "line12", "line13", "line14", "line15",
+		"line16", "line17", "line18", "line19", "line20",
+	)
+	writeFile(t, dir, "keep.txt", base)
+	runGit(t, dir, "add", "keep.txt")
+	runGit(t, dir, "commit", "-m", "long keep")
+
+	// Modify two well-separated regions (line02 and line19).
+	modified := multiHunkContent(
+		"line01", "CHANGED02", "line03", "line04", "line05",
+		"line06", "line07", "line08", "line09", "line10",
+		"line11", "line12", "line13", "line14", "line15",
+		"line16", "line17", "line18", "CHANGED19", "line20",
+	)
+	writeFile(t, dir, "keep.txt", modified)
+
+	svc, _ := Open(dir)
+	d, err := svc.Diff("keep.txt", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc, d
+}
+
+func TestParseHunksMultiHunk(t *testing.T) {
+	_, d := makeMultiHunkRepo(t)
+	hunks, err := ParseHunks(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hunks) < 2 {
+		t.Fatalf("want >=2 hunks, got %d:\n%s", len(hunks), d)
+	}
+	for i, h := range hunks {
+		if h.OldStart <= 0 || h.NewStart <= 0 {
+			t.Errorf("hunk %d: OldStart=%d NewStart=%d, want >0", i, h.OldStart, h.NewStart)
+		}
+		if h.Patch == "" {
+			t.Errorf("hunk %d: empty Patch", i)
+		}
+		// Patch must contain exactly one @@ hunk header.
+		if c := countHunkHeaders(h.Patch); c != 1 {
+			t.Errorf("hunk %d: Patch has %d @@ headers, want 1:\n%s", i, c, h.Patch)
+		}
+		if !strings.HasPrefix(h.Header, "@@") {
+			t.Errorf("hunk %d: Header = %q, want @@ prefix", i, h.Header)
+		}
+	}
+	// First hunk touches the early region, the last the later region.
+	if hunks[0].NewStart > hunks[len(hunks)-1].NewStart {
+		t.Errorf("hunks not in file order: %d then %d", hunks[0].NewStart, hunks[len(hunks)-1].NewStart)
+	}
+}
+
+// countHunkHeaders counts lines that begin with "@@" in patch.
+func countHunkHeaders(patch string) int {
+	n := 0
+	for _, ln := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(ln, "@@") {
+			n++
+		}
+	}
+	return n
+}
+
+func TestApplyPatchRoundTrip(t *testing.T) {
+	svc, orig := makeMultiHunkRepo(t)
+	hunks, err := ParseHunks(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hunks) < 2 {
+		t.Fatalf("need >=2 hunks, got %d", len(hunks))
+	}
+
+	// Discard only the first hunk from the worktree.
+	if err := svc.ApplyPatch(hunks[0].Patch, true, false); err != nil {
+		t.Fatalf("discard hunk 0: %v", err)
+	}
+	after, err := svc.Diff("keep.txt", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(after, "CHANGED02") {
+		t.Errorf("hunk 0's change should be gone after reverse-apply:\n%s", after)
+	}
+	if !strings.Contains(after, "CHANGED19") {
+		t.Errorf("hunk 1's change should remain after reverse-apply:\n%s", after)
+	}
+
+	// Restore the first hunk; diff should match the original again.
+	if err := svc.ApplyPatch(hunks[0].Patch, false, false); err != nil {
+		t.Fatalf("restore hunk 0: %v", err)
+	}
+	restored, err := svc.Diff("keep.txt", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored != orig {
+		t.Errorf("restored diff != original:\n--- restored ---\n%s\n--- original ---\n%s", restored, orig)
+	}
+}
+
+func TestHunkAtLine(t *testing.T) {
+	_, d := makeMultiHunkRepo(t)
+	hunks, err := ParseHunks(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hunks) < 2 {
+		t.Fatalf("need >=2 hunks, got %d", len(hunks))
+	}
+
+	// A line strictly inside hunk 1's range maps to index 1.
+	mid := (hunks[1].StartLine + hunks[1].EndLine) / 2
+	if got := HunkAtLine(hunks, mid); got != 1 {
+		t.Errorf("HunkAtLine(mid of hunk1=%d) = %d, want 1", mid, got)
+	}
+
+	// The @@ header line of hunk 0 counts as hunk 0.
+	if got := HunkAtLine(hunks, hunks[0].StartLine); got != 0 {
+		t.Errorf("HunkAtLine(header of hunk0) = %d, want 0", got)
+	}
+
+	// A line in the file header (before the first hunk) maps to -1.
+	if got := HunkAtLine(hunks, 0); got != -1 {
+		t.Errorf("HunkAtLine(0, file header) = %d, want -1", got)
+	}
+
+	// An out-of-range line past the last hunk maps to -1.
+	last := hunks[len(hunks)-1].EndLine
+	if got := HunkAtLine(hunks, last+1000); got != -1 {
+		t.Errorf("HunkAtLine(out of range) = %d, want -1", got)
+	}
+}
+
+func TestParseHunksEmpty(t *testing.T) {
+	for _, in := range []string{"", "   \n\t\n"} {
+		hunks, err := ParseHunks(in)
+		if err != nil {
+			t.Errorf("ParseHunks(%q): err = %v", in, err)
+		}
+		if len(hunks) != 0 {
+			t.Errorf("ParseHunks(%q): len = %d, want 0", in, len(hunks))
+		}
+	}
+}
+
+func TestParseHunksUntracked(t *testing.T) {
+	dir := newRepo(t)
+	svc, _ := Open(dir)
+	writeFile(t, dir, "loose.txt", "alpha\nbeta\ngamma\n")
+	d, err := svc.Diff("loose.txt", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hunks, err := ParseHunks(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hunks) != 1 {
+		t.Fatalf("untracked diff should yield 1 hunk, got %d:\n%s", len(hunks), d)
+	}
+	if hunks[0].Patch == "" || countHunkHeaders(hunks[0].Patch) != 1 {
+		t.Errorf("untracked hunk patch malformed:\n%s", hunks[0].Patch)
+	}
+}
+
+func TestDiscardUntracked(t *testing.T) {
+	dir := newRepo(t)
+	svc, _ := Open(dir)
+	writeFile(t, dir, "loose.txt", "trash\n")
+
+	st, _ := svc.Status()
+	if _, ok := findFile(st.Untracked, "loose.txt"); !ok {
+		t.Fatalf("loose.txt should be untracked before discard")
+	}
+
+	if err := svc.DiscardUntracked("loose.txt"); err != nil {
+		t.Fatalf("DiscardUntracked: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "loose.txt")); !os.IsNotExist(err) {
+		t.Errorf("loose.txt should be gone, stat err = %v", err)
+	}
+	st, _ = svc.Status()
+	if _, ok := findFile(st.Untracked, "loose.txt"); ok {
+		t.Errorf("loose.txt should not be listed after discard")
 	}
 }
 

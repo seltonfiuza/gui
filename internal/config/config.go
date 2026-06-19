@@ -26,6 +26,19 @@ const (
 	ActBranchPanel
 	ActPRList
 	ActCancel
+	// Appended in checklist 01 (granular undo + resizable layout). Keep these at
+	// the end so existing iota values are unchanged.
+	ActUndoFile   // U: discard the whole file (with confirmation)
+	ActRecover    // ctrl+r: restore the most recently discarded change
+	ActPaneGrow   // >: grow the diff pane / shrink the file list
+	ActPaneShrink // <: shrink the diff pane / grow the file list
+	ActHunkNext   // }: jump to next hunk in the diff
+	ActHunkPrev   // {: jump to previous hunk in the diff
+	// Appended in checklist 02 (near real-time refresh). Keep at the end.
+	ActToggleAutoRefresh // ctrl+t: turn the background auto-refresh tick on/off
+	// Appended in checklist 03 (UI polish: themes + clean diff). Keep at the end.
+	ActThemePicker   // <leader> t: open the theme picker overlay (live preview)
+	ActToggleRawDiff // ctrl+g: toggle showing the raw (unfiltered) diff
 )
 
 // Keymap maps keys/chords to actions. Leader is the chord prefix.
@@ -53,10 +66,19 @@ func DefaultKeymap() Keymap {
 			"enter":  ActConfirm,
 			"s":      ActStageToggle,
 			"u":      ActUndo,
+			"U":      ActUndoFile,
+			"ctrl+r": ActRecover,
+			">":      ActPaneGrow,
+			"<":      ActPaneShrink,
+			"}":      ActHunkNext,
+			"{":      ActHunkPrev,
+			"ctrl+t": ActToggleAutoRefresh,
+			"ctrl+g": ActToggleRawDiff,
 			"esc":    ActCancel,
 		},
 		chords: map[string]Action{
 			"b": ActBranchPanel,
+			"t": ActThemePicker,
 		},
 	}
 }
@@ -65,13 +87,22 @@ func DefaultKeymap() Keymap {
 // order.
 func (k Keymap) Bindings() []Binding {
 	return []Binding{
-		{Keys: []string{"j", "down"}, Action: ActDown, Desc: "Move down"},
-		{Keys: []string{"k", "up"}, Action: ActUp, Desc: "Move up"},
+		{Keys: []string{"j", "down"}, Action: ActDown, Desc: "Move down (by line within a diff)"},
+		{Keys: []string{"k", "up"}, Action: ActUp, Desc: "Move up (by line within a diff)"},
 		{Keys: []string{"enter"}, Action: ActConfirm, Desc: "Open / confirm"},
 		{Keys: []string{"s"}, Action: ActStageToggle, Desc: "Stage / unstage selected file"},
-		{Keys: []string{"u"}, Action: ActUndo, Desc: "Discard / undo selected change"},
+		{Keys: []string{"u"}, Action: ActUndo, Desc: "Discard the change under the cursor (hunk)"},
+		{Keys: []string{"U"}, Action: ActUndoFile, Desc: "Discard the whole file (confirm)"},
+		{Keys: []string{"ctrl+r"}, Action: ActRecover, Desc: "Recover the last discarded change"},
+		{Keys: []string{"}"}, Action: ActHunkNext, Desc: "Next hunk"},
+		{Keys: []string{"{"}, Action: ActHunkPrev, Desc: "Previous hunk"},
+		{Keys: []string{">"}, Action: ActPaneGrow, Desc: "Grow the diff pane"},
+		{Keys: []string{"<"}, Action: ActPaneShrink, Desc: "Shrink the diff pane"},
 		{Keys: []string{"r"}, Action: ActRefresh, Desc: "Refresh status"},
+		{Keys: []string{"ctrl+t"}, Action: ActToggleAutoRefresh, Desc: "Toggle auto-refresh on/off"},
+		{Keys: []string{"ctrl+g"}, Action: ActToggleRawDiff, Desc: "Toggle raw / cleaned diff view"},
 		{Keys: []string{"<leader> b"}, Action: ActBranchPanel, Desc: "Open branch panel"},
+		{Keys: []string{"<leader> t"}, Action: ActThemePicker, Desc: "Open theme picker (live preview)"},
 		{Keys: []string{"?"}, Action: ActHelp, Desc: "Toggle help overlay"},
 		{Keys: []string{"esc"}, Action: ActCancel, Desc: "Cancel / close overlay"},
 		{Keys: []string{"q", "ctrl+c"}, Action: ActQuit, Desc: "Quit"},
@@ -120,6 +151,8 @@ func (d *Dispatcher) LeaderPending() bool { return d.leaderPending }
 type Config struct {
 	Leader     string `json:"leader"`
 	GitHubHost string `json:"github_host"`
+	// Theme is the persisted UI theme preset name (see internal/ui/styles).
+	Theme string `json:"theme"`
 }
 
 // configPath returns os.UserConfigDir()/gui/config.json.
@@ -133,7 +166,7 @@ func configPath() (string, error) {
 
 // Load reads the config file, returning defaults when absent.
 func Load() (Config, error) {
-	def := Config{Leader: "space"}
+	def := Config{Leader: "space", Theme: "tokyonight"}
 	path, err := configPath()
 	if err != nil {
 		return def, err

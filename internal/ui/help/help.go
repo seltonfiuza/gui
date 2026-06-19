@@ -41,8 +41,27 @@ func (m Model) View(width, height int) string {
 	}
 	rows = append(rows, "", styles.Desc.Render("press ? or esc to close"))
 
+	// Cap the body so the bordered box (border+padding = 4 rows of chrome) never
+	// exceeds the available height; drop overflow with a "… more" marker rather
+	// than letting lipgloss.Place render the box off-screen.
+	rows = capRows(rows, height-4)
 	box := styles.Overlay.Render(strings.Join(rows, "\n"))
 	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
+}
+
+// capRows truncates rows to at most max lines, replacing the last kept line with
+// a "… more" marker when content was dropped. A non-positive max keeps one line.
+func capRows(rows []string, max int) []string {
+	if max < 1 {
+		max = 1
+	}
+	if len(rows) <= max {
+		return rows
+	}
+	out := make([]string, max)
+	copy(out, rows[:max])
+	out[max-1] = styles.Desc.Render("… more (resize to see all)")
+	return out
 }
 
 func padRight(s string, w int) string {

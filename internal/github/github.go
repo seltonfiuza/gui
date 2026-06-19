@@ -71,6 +71,6 @@ func (s *Service) Token() (string, error)         { panic("not implemented") }
 func (s *Service) SetToken(pat string) error      { panic("not implemented") }
 func (s *Service) ClearToken() error              { panic("not implemented") }
 
-func (s *Service) ListPRs(repo *git.Remote) ([]PR, error)            { panic("not implemented") }
-func (s *Service) ViewPR(repo *git.Remote, number int) (PR, error)   { panic("not implemented") }
+func (s *Service) ListPRs(repo *git.Remote) ([]PR, error)                { panic("not implemented") }
+func (s *Service) ViewPR(repo *git.Remote, number int) (PR, error)       { panic("not implemented") }
 func (s *Service) CreatePR(repo *git.Remote, o CreatePROpts) (PR, error) { panic("not implemented") }
