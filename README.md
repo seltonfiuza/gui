@@ -163,29 +163,6 @@ the picker opened. The selected theme is saved to the config file (`theme` key)
 and restored on the next launch. Truecolor values are downsampled automatically to
 the terminal's 256/16-color profile.
 
-### Mouse
-
-Mouse support is enabled by default:
-
-- **Hover** a file row to highlight it under the pointer (cosmetic — it never
-  changes the selection).
-- **Click a file row** to select it and load its diff.
-- **Click in the diff pane** to focus it and move the line cursor to that line
-  (the scroll offset is accounted for).
-- **Scroll wheel** acts on whichever pane the pointer is over: over the diff it
-  scrolls the content; over the file list it moves the file selection (regardless
-  of which pane has keyboard focus). Wheeling over the divider or chrome is ignored.
-- **Drag the divider** between the list and diff to resize the split.
-
-A one-column **scrollbar** on the right edge of the diff shows your position and
-how much is off-screen. Clicks inside overlays (branch / help / theme picker /
-confirm) are ignored so the keyboard flow is never disturbed, and keyboard-only
-usage is unchanged.
-
-Trade-off: enabling all-motion mouse tracking (needed for hover) means the
-terminal's own click-drag **text selection** is captured by the app. Use your
-terminal's modifier (often `Shift`) to select/copy text, or rely on the keyboard.
-
 ### Branch panel (`<leader> b`)
 
 A modal overlay listing **Local** branches (current marked `*`) and
@@ -203,28 +180,6 @@ A modal overlay listing **Local** branches (current marked `*`) and
 Delete (when unmerged) and rebase require explicit confirmation. Rebase
 conflicts surface an inline message; resolve them with the `git` CLI.
 
-## Architecture
-
-```
-main.go                 # entrypoint: open repo, build root model, run program
-internal/
-  git/                  # git CLI wrapper + domain types (Status, ChangedFile, Branch). No UI deps.
-  config/               # keymap, leader-chord dispatcher, prefs persistence. No UI deps.
-  ui/
-    app.go              # root model: layout, key dispatch, leader chord, view routing
-    diffview/           # header + file list + diff pane (FR-1, FR-2)
-    branchpanel/        # branch overlay (FR-3)
-    help/               # `?` keymap overlay (FR-4)
-    themepicker/        # theme switcher overlay (live preview)
-    styles/             # palette + theme registry; lipgloss styles derived from the active palette
-docs/specs/             # spec-driven development: architecture, git, keymap, ui
-```
-
-The exported APIs of `internal/git` and `internal/config` are frozen contracts;
-the UI codes against them. All blocking git calls run inside Bubble Tea `tea.Cmd`s
-so the UI goroutine never blocks, and git errors are surfaced as human-readable
-toasts/inline messages rather than panics. See `docs/specs/` and `TASK.md`.
-
 ## Development
 
 ```sh
@@ -237,8 +192,3 @@ go test ./...      # unit tests (git parsing/mutations, keymap dispatch, UI tran
 is not on `PATH`. **Platform:** developed and verified on macOS; the code is
 portable Go and intended to build on Linux.
 
-## Scope
-
-In scope: local diff/stage/unstage/discard and branch checkout/create/delete/rebase.
-Out of scope (per `TASK.md`): GitHub/GitLab/Bitbucket auth or API, pull requests,
-issues, the `gh` CLI, full IDE integration, and non-Git VCS.
