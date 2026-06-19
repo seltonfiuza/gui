@@ -1,5 +1,6 @@
 TASK.md
-docs/
+docs/*
+!docs/example.png
 
 # build artifact
 /gui
