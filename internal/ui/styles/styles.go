@@ -112,8 +112,8 @@ func Apply(p Palette) {
 
 	GroupHeader = lipgloss.NewStyle().Foreground(col(p.OverlayTitle)).Bold(true)
 	GroupStaged = lipgloss.NewStyle().Foreground(col(p.GroupStaged)).Bold(true)
-	GroupUnstaged = lipgloss.NewStyle().Foreground(col(p.GroupUnstaged)).Bold(true)
-	GroupUntracked = lipgloss.NewStyle().Foreground(col(p.GroupUntracked)).Bold(true)
+	GroupUnstaged = lipgloss.NewStyle().Foreground(col(p.GroupUnstaged)).Background(col(p.GroupUnstagedBg)).Bold(true)
+	GroupUntracked = lipgloss.NewStyle().Foreground(col(p.GroupUntracked)).Background(col(p.GroupUntrackedBg)).Bold(true)
 	GroupBadge = lipgloss.NewStyle().Foreground(col(p.Muted))
 
 	Row = lipgloss.NewStyle()

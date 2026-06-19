@@ -613,7 +613,7 @@ func (m *Model) renderList() string {
 			if lastGroup != -1 {
 				b.WriteByte('\n')
 			}
-			b.WriteString(renderGroupHeader(r.Group, m.groupCount(r.Group)))
+			b.WriteString(renderGroupHeader(r.Group, m.groupCount(r.Group), m.listWidth))
 			b.WriteByte('\n')
 			lastGroup = r.Group
 		}
@@ -643,16 +643,25 @@ func (m *Model) renderList() string {
 }
 
 // renderGroupHeader renders a distinct, per-group header with a count badge,
-// e.g. "Unstaged (3)".
-func renderGroupHeader(g Group, count int) string {
-	var style = styles.GroupUnstaged
-	switch g {
-	case GroupStaged:
-		style = styles.GroupStaged
-	case GroupUntracked:
-		style = styles.GroupUntracked
+// e.g. "Unstaged (3)". The Unstaged and Untracked headers render as full-width
+// background banners (padded to width) so the three groups are unmistakable;
+// Staged stays a plain colored label.
+func renderGroupHeader(g Group, count int, width int) string {
+	badge := fmt.Sprintf("(%d)", count)
+	banner := func(style lipgloss.Style) string {
+		if width > 0 {
+			style = style.Width(width)
+		}
+		return style.Render(groupName(g) + " " + badge)
 	}
-	return style.Render(groupName(g)) + " " + styles.GroupBadge.Render(fmt.Sprintf("(%d)", count))
+	switch g {
+	case GroupUnstaged:
+		return banner(styles.GroupUnstaged)
+	case GroupUntracked:
+		return banner(styles.GroupUntracked)
+	default: // GroupStaged
+		return styles.GroupStaged.Render(groupName(g)) + " " + styles.GroupBadge.Render(badge)
+	}
 }
 
 // GroupRowRange returns the [start,end) row indices spanned by each group in the
