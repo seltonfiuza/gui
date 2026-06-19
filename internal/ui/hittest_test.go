@@ -4,8 +4,8 @@ import "testing"
 
 func TestHitTest(t *testing.T) {
 	// header=1 row, body=20 rows, total width=80, list width=30, divider at x=30,
-	// diff scrolled down by 5 rendered rows.
-	l := layout{headerHeight: 1, bodyHeight: 20, width: 80, listWidth: 30, diffYOffset: 5}
+	// a 1-col scrollbar at x=79, diff scrolled down by 5 rendered rows.
+	l := layout{headerHeight: 1, bodyHeight: 20, width: 80, listWidth: 30, scrollbarWidth: 1, diffYOffset: 5}
 
 	cases := []struct {
 		name       string
@@ -20,7 +20,8 @@ func TestHitTest(t *testing.T) {
 		{"on divider", 30, 4, hitDivider, 0},
 		{"in diff top → +offset", 40, 1, hitDiff, 5}, // body line 0 + yOffset 5
 		{"in diff lower", 40, 6, hitDiff, 10},        // body line 5 + 5
-		{"right edge inside", 79, 2, hitDiff, 6},
+		{"last diff content col", 78, 2, hitDiff, 6}, // body line 1 + 5
+		{"scrollbar col → none", 79, 2, hitNone, 0},  // x == width-1 is the scrollbar
 		{"past width → none", 80, 2, hitNone, 0},
 		{"negative → none", -1, 2, hitNone, 0},
 	}

@@ -1,7 +1,12 @@
 package diffview
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/selton/gui/internal/git"
 )
@@ -193,5 +198,132 @@ func TestSetDiffPreservingKeepsCursorWhenUnchanged(t *testing.T) {
 	m.SetDiffPreserving("b.go", changed)
 	if m.LineCursor() != m.Hunks()[0].StartLine {
 		t.Fatalf("changed diff should reset cursor to first hunk")
+	}
+}
+
+// TestListClickMapsToRenderedFileWhenScrolled is the regression guard for the
+// "click a lot upper to hit the right file" bug: with a long, scrolled list of
+// long-path files, every clickable screen line must map (via ListLineToRow) to
+// the file actually rendered on that line, and no line may wrap.
+func TestListClickMapsToRenderedFileWhenScrolled(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New()
+	m.SetSize(50, 8, 24) // small height forces scroll; listWidth=24
+	var files []git.ChangedFile
+	for i := 0; i < 30; i++ {
+		files = append(files, git.ChangedFile{
+			Path:     fmt.Sprintf("dir/subdir/long-file-name-%02d.go", i),
+			Worktree: git.Modified,
+		})
+	}
+	m.SetStatus(&git.Status{Unstaged: files})
+	for i := 0; i < 29; i++ { // select the last file -> list must scroll
+		m.CursorDown()
+	}
+	if m.listOffset == 0 {
+		t.Fatalf("list should have scrolled for 30 files in height 8")
+	}
+
+	cells := m.listCells()
+	lines := strings.Split(m.renderList(), "\n")
+	if len(lines) > 8 {
+		t.Fatalf("rendered %d screen lines, exceeds height 8", len(lines))
+	}
+	for screen, ln := range lines {
+		if w := lipgloss.Width(ln); w > 24 {
+			t.Errorf("screen line %d width %d overflows listWidth 24: %q", screen, w, ln)
+		}
+		ci := m.listOffset + screen
+		row, ok := m.ListLineToRow(screen)
+		wantRow := cells[ci].row
+		if wantRow < 0 {
+			if ok {
+				t.Errorf("screen %d is a non-file line but hit-test returned row %d", screen, row)
+			}
+			continue
+		}
+		if !ok || row != wantRow {
+			t.Errorf("screen %d: hit-test row=%d ok=%v, want row %d", screen, row, ok, wantRow)
+		}
+	}
+	// The selected (last) file's first line must be within the visible window.
+	first, _, _ := m.cursorCellRange()
+	if first < m.listOffset || first >= m.listOffset+8 {
+		t.Errorf("selected row first line %d not visible (offset=%d height=8)", first, m.listOffset)
+	}
+}
+
+// TestLongPathWraps asserts a path longer than the pane wraps onto multiple
+// screen lines (stays readable) and that EVERY one of those lines maps back to
+// the same file row — so clicking any wrapped line selects the right file.
+func TestLongPathWraps(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New()
+	m.SetSize(50, 20, 20) // listWidth=20
+	long := "internal/very/deeply/nested/path/to/a/file/way_too_long.go"
+	m.SetStatus(&git.Status{Unstaged: []git.ChangedFile{
+		{Path: "a.go", Worktree: git.Modified},
+		{Path: long, Worktree: git.Modified},
+		{Path: "z.go", Worktree: git.Modified},
+	}})
+	cells := m.listCells()
+	var lines []int
+	for ci, c := range cells {
+		if c.row == 1 { // the long path is row index 1
+			lines = append(lines, ci)
+		}
+	}
+	if len(lines) < 2 {
+		t.Fatalf("long path should wrap to multiple lines, got %d", len(lines))
+	}
+	for _, ci := range lines {
+		if row, ok := m.ListLineToRow(ci - m.listOffset); !ok || row != 1 {
+			t.Errorf("wrapped line %d: got row=%d ok=%v want 1", ci, row, ok)
+		}
+	}
+}
+
+// TestFolderTreeStructure asserts the list renders nested files as a folder tree:
+// directory nodes are present and non-selectable, file leaves map to their row,
+// and the depth-first order matches the sorted row order.
+func TestFolderTreeStructure(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New()
+	m.SetSize(60, 40, 36)
+	m.SetStatus(&git.Status{Unstaged: []git.ChangedFile{
+		{Path: "internal/ui/app.go", Worktree: git.Modified},
+		{Path: "internal/ui/app_test.go", Worktree: git.Modified},
+		{Path: "internal/git/git.go", Worktree: git.Modified},
+		{Path: "README.md", Worktree: git.Modified},
+	}})
+	cells := m.listCells()
+
+	var folders, files int
+	for ci, c := range cells {
+		row, ok := m.ListLineToRow(ci) // listOffset is 0 here
+		if c.row < 0 {
+			if ok {
+				t.Errorf("cell %d (%q) is non-file but hit-test returned a row", ci, c.text)
+			}
+			if strings.Contains(c.text, "/") && !strings.Contains(c.text, "(") {
+				folders++
+			}
+			continue
+		}
+		if !ok || row != c.row {
+			t.Errorf("cell %d: hit-test row=%d ok=%v want %d", ci, row, ok, c.row)
+		}
+		files++
+	}
+	if files != 4 {
+		t.Errorf("expected 4 file leaves, got %d", files)
+	}
+	// internal/, git/, ui/ -> at least 3 folder nodes.
+	if folders < 3 {
+		t.Errorf("expected >=3 folder nodes, got %d", folders)
+	}
+	// Sorted row order: README.md first (root), then internal/git/git.go, then ui.
+	if m.rows[0].File.Path != "README.md" {
+		t.Errorf("rows should be path-sorted; row0=%s", m.rows[0].File.Path)
 	}
 }

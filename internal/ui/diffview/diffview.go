@@ -15,11 +15,13 @@ package diffview
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/selton/gui/internal/git"
 	"github.com/selton/gui/internal/ui/styles"
@@ -55,6 +57,13 @@ type Model struct {
 	status *git.Status
 	rows   []Row
 	cursor int
+	// hoverRow is the flattened row index currently under the mouse pointer, or
+	// -1 when nothing is hovered. Purely a visual affordance — it never changes
+	// the selection or what an action operates on.
+	hoverRow int
+	// listOffset is the number of list lines scrolled past the top of the file
+	// pane, so a list taller than the pane scrolls to keep the selection visible.
+	listOffset int
 
 	focus Focus
 
@@ -77,8 +86,28 @@ type Model struct {
 
 // New builds an empty diff panel.
 func New() Model {
-	return Model{}
+	return Model{hoverRow: -1}
 }
+
+// SetHoverRow sets the flattened file-row index under the mouse pointer (-1 for
+// none). Returns true when the hover target changed, so the caller can avoid a
+// redundant re-render on every pixel of mouse motion. Hover is cosmetic only.
+func (m *Model) SetHoverRow(i int) bool {
+	if i < -1 || i >= len(m.rows) {
+		i = -1
+	}
+	if i == m.hoverRow {
+		return false
+	}
+	m.hoverRow = i
+	return true
+}
+
+// ClearHover removes any hover highlight. Returns true if state changed.
+func (m *Model) ClearHover() bool { return m.SetHoverRow(-1) }
+
+// HoverRow returns the flattened row index under the pointer, or -1 for none.
+func (m *Model) HoverRow() int { return m.hoverRow }
 
 // SetStatus replaces the status and rebuilds the flattened row list, reconciling
 // the selection by path: the previously selected file stays selected if it is
@@ -95,6 +124,7 @@ func (m *Model) SetStatus(s *git.Status) {
 		paths[i] = r.File.Path
 	}
 	m.cursor = ReconcileSelection(prev, prevIdx, paths)
+	m.ensureSelectedVisible()
 }
 
 // ReconcileSelection resolves the new cursor index after the file list changed.
@@ -133,15 +163,19 @@ func (m *Model) rebuild() {
 	if m.status == nil {
 		return
 	}
-	for _, f := range m.status.Staged {
-		m.rows = append(m.rows, Row{Group: GroupStaged, File: f})
+	// Sort each group by path so the flattened row order matches the depth-first
+	// order the folder tree renders in (lexicographic full-path order == tree
+	// order), keeping j/k navigation aligned with what's on screen.
+	add := func(g Group, files []git.ChangedFile) {
+		sorted := append([]git.ChangedFile(nil), files...)
+		sort.SliceStable(sorted, func(a, b int) bool { return sorted[a].Path < sorted[b].Path })
+		for _, f := range sorted {
+			m.rows = append(m.rows, Row{Group: g, File: f})
+		}
 	}
-	for _, f := range m.status.Unstaged {
-		m.rows = append(m.rows, Row{Group: GroupUnstaged, File: f})
-	}
-	for _, f := range m.status.Untracked {
-		m.rows = append(m.rows, Row{Group: GroupUntracked, File: f})
-	}
+	add(GroupStaged, m.status.Staged)
+	add(GroupUnstaged, m.status.Unstaged)
+	add(GroupUntracked, m.status.Untracked)
 }
 
 // SetSize lays out the panel for the available space. listWidth is the desired
@@ -150,7 +184,8 @@ func (m *Model) SetSize(width, height, listWidth int) {
 	m.totalWidth = width
 	m.totalHeight = height
 	m.listWidth = ClampListWidth(width, listWidth)
-	vpWidth := width - m.listWidth - 1
+	// Reserve one column for the divider and one for the diff scrollbar.
+	vpWidth := width - m.listWidth - dividerWidth - ScrollbarWidth
 	if vpWidth < 1 {
 		vpWidth = 1
 	}
@@ -166,6 +201,8 @@ func (m *Model) SetSize(width, height, listWidth int) {
 	}
 	// Re-render the diff content for the new width so highlight + wrapping match.
 	m.refreshViewport()
+	// A height change can move the selection out of the visible window.
+	m.ensureSelectedVisible()
 }
 
 // MinListWidth / MinDiffWidth are the minimum pane widths enforced by resize.
@@ -173,6 +210,9 @@ const (
 	MinListWidth = 16
 	MinDiffWidth = 20
 	dividerWidth = 1
+	// ScrollbarWidth is the single column reserved at the right edge of the diff
+	// pane for the vertical scrollbar.
+	ScrollbarWidth = 1
 )
 
 // ClampListWidth returns a list width that respects the minimum widths of both
@@ -207,14 +247,21 @@ func ClampListWidth(total, want int) int {
 // Focus reports the current focus target.
 func (m *Model) Focus() Focus { return m.focus }
 
-// FocusDiff focuses the diff pane (j/k move the line cursor).
+// FocusDiff focuses the diff pane (j/k move the line cursor). It restyles the
+// cursor line so the highlight appears immediately on focus (not only after the
+// first cursor move).
 func (m *Model) FocusDiff() {
 	m.focus = FocusDiff
+	m.restyleCursorLines()
 	m.ensureCursorVisible()
 }
 
-// FocusList focuses the file list (j/k move the file selection).
-func (m *Model) FocusList() { m.focus = FocusList }
+// FocusList focuses the file list (j/k move the file selection). It restyles the
+// cursor line so the diff highlight is cleared immediately when focus leaves.
+func (m *Model) FocusList() {
+	m.focus = FocusList
+	m.restyleCursorLines()
+}
 
 // CursorDown moves the file selection (list focus) or the diff line cursor
 // (diff focus) down by one.
@@ -226,6 +273,7 @@ func (m *Model) CursorDown() {
 	if m.cursor < len(m.rows)-1 {
 		m.cursor++
 	}
+	m.ensureSelectedVisible()
 }
 
 // CursorUp moves the file selection (list focus) or the diff line cursor (diff
@@ -238,13 +286,36 @@ func (m *Model) CursorUp() {
 	if m.cursor > 0 {
 		m.cursor--
 	}
+	m.ensureSelectedVisible()
+}
+
+// SelectNext / SelectPrev move the FILE selection by one, irrespective of the
+// current focus. Used by the mouse wheel over the file list so scrolling there
+// always moves the selection (never the diff line cursor).
+func (m *Model) SelectNext() {
+	if m.cursor < len(m.rows)-1 {
+		m.cursor++
+	}
+	m.ensureSelectedVisible()
+}
+
+func (m *Model) SelectPrev() {
+	if m.cursor > 0 {
+		m.cursor--
+	}
+	m.ensureSelectedVisible()
 }
 
 // renderedRows is the number of rows shown in the cleaned view.
 func (m *Model) renderedRows() int { return len(m.cleaned.lines) }
 
-// renderedCursor returns the rendered row the raw line cursor maps to (or 0).
+// renderedCursor returns the rendered row the raw line cursor maps to, or -1
+// when there is no valid rendered row (e.g. an all-plumbing diff renders to
+// nothing in cleaned mode). Callers must treat -1 as "no cursor row".
 func (m *Model) renderedCursor() int {
+	if len(m.cleaned.lines) == 0 {
+		return -1
+	}
 	if m.lineCursor >= 0 && m.lineCursor < len(m.cleaned.rawToRendered) {
 		if r := m.cleaned.rawToRendered[m.lineCursor]; r >= 0 {
 			return r
@@ -370,6 +441,7 @@ func (m *Model) SelectRow(i int) bool {
 		return false
 	}
 	m.cursor = i
+	m.ensureSelectedVisible()
 	return true
 }
 
@@ -464,9 +536,13 @@ func (m *Model) styleRow(row int, cl cleanLine, cursorRow int) string {
 	if m.focus == FocusDiff && row == cursorRow {
 		width := m.vp.Width
 		if width < 1 {
-			width = lipgloss.Width(cl.text)
+			return styles.DiffCursor.Render(cl.text)
 		}
-		return styles.DiffCursor.Width(width).Render(cl.text)
+		// Truncate to the pane width first: a line longer than the pane would
+		// otherwise wrap into multiple visual rows under .Width(), desyncing the
+		// rendered-row↔raw-line mapping the cursor relies on.
+		text := ansi.Truncate(cl.text, width, "…")
+		return styles.DiffCursor.Width(width).Render(text)
 	}
 	return styleClean(cl)
 }
@@ -518,6 +594,9 @@ func (m *Model) ensureCursorVisible() {
 		return
 	}
 	row := m.renderedCursor()
+	if row < 0 {
+		return
+	}
 	top := m.vp.YOffset
 	bottom := top + m.vp.Height - 1
 	switch {
@@ -569,19 +648,10 @@ func glyph(g Group, f git.ChangedFile) string {
 	}
 }
 
-func label(f git.ChangedFile) string {
-	if f.OrigPath != "" {
-		return f.OrigPath + " → " + f.Path
-	}
-	return f.Path
-}
-
-// View renders the file list beside the diff viewport.
+// View renders the file list beside the diff viewport plus a scrollbar.
 func (m *Model) View() string {
 	if m.IsClean() {
-		msg := styles.Clean.Render("nothing to commit, working tree clean")
-		return lipgloss.Place(maxi(m.totalWidth, 1), maxi(m.totalHeight, 1),
-			lipgloss.Center, lipgloss.Center, msg)
+		return m.renderCleanState()
 	}
 
 	list := m.renderList()
@@ -589,57 +659,319 @@ func (m *Model) View() string {
 
 	list = lipgloss.NewStyle().Width(m.listWidth).Height(m.totalHeight).Render(list)
 	gap := styles.Divider.Render(verticalBar(m.totalHeight))
-	return lipgloss.JoinHorizontal(lipgloss.Top, list, gap, diff)
+	sb := m.renderScrollbar()
+	return lipgloss.JoinHorizontal(lipgloss.Top, list, gap, diff, sb)
 }
 
-// groupCount returns how many rows belong to group g.
-func (m *Model) groupCount(g Group) int {
-	n := 0
-	for _, r := range m.rows {
-		if r.Group == g {
-			n++
+// renderCleanState renders the friendly "working tree clean" empty state.
+func (m *Model) renderCleanState() string {
+	title := styles.GroupStaged.Render("✓ working tree clean")
+	hint := styles.Clean.Render("nothing to commit — you're all caught up")
+	msg := lipgloss.JoinVertical(lipgloss.Center, title, "", hint)
+	return lipgloss.Place(maxi(m.totalWidth, 1), maxi(m.totalHeight, 1),
+		lipgloss.Center, lipgloss.Center, msg)
+}
+
+// renderScrollbar draws a one-column vertical scrollbar for the diff viewport: a
+// faint full-height track with a brighter thumb sized/positioned to the visible
+// window. When the diff fits entirely it renders just the track.
+func (m *Model) renderScrollbar() string {
+	h := m.totalHeight
+	if h < 1 {
+		h = 1
+	}
+	total := len(m.styledLines)
+	visible := m.vp.Height
+	lines := make([]string, h)
+	if total <= visible || total == 0 || visible < 1 {
+		for i := range lines {
+			lines[i] = styles.ScrollTrack.Render("│")
+		}
+		return strings.Join(lines, "\n")
+	}
+	thumb := h * visible / total
+	if thumb < 1 {
+		thumb = 1
+	}
+	if thumb > h {
+		thumb = h
+	}
+	maxPos := h - thumb
+	pos := 0
+	if denom := total - visible; denom > 0 {
+		pos = m.vp.YOffset * maxPos / denom
+	}
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > maxPos {
+		pos = maxPos
+	}
+	for i := range lines {
+		if i >= pos && i < pos+thumb {
+			lines[i] = styles.ScrollThumb.Render("█")
+		} else {
+			lines[i] = styles.ScrollTrack.Render("│")
 		}
 	}
-	return n
+	return strings.Join(lines, "\n")
+}
+
+// listCell is one screen line of the file list: its rendered text plus the file
+// row it belongs to (-1 for group headers and blank separators). A file whose
+// path wraps contributes several cells, all tagged with the same row — so a click
+// on any wrapped line selects that file. This is the single source of truth that
+// renderList, ListLineToRow, and the scroll math all derive from, which is what
+// keeps mouse hit-testing exact regardless of wrapping.
+type listCell struct {
+	text string
+	row  int
 }
 
 func (m *Model) renderList() string {
-	var b strings.Builder
-	lastGroup := Group(-1)
-	for i, r := range m.rows {
-		// Empty groups never produce a row, so emitting a header only when the
-		// group changes (i.e. a row exists) inherently omits empty groups.
-		if r.Group != lastGroup {
-			if lastGroup != -1 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(renderGroupHeader(r.Group, m.groupCount(r.Group), m.listWidth))
-			b.WriteByte('\n')
-			lastGroup = r.Group
-		}
-		gl := glyph(r.Group, r.File)
-		g := styles.GlyphStyle(gl).Render(gl)
-		text := label(r.File)
-		if r.Group == GroupUntracked {
-			text = styles.UntrackedRow.Render(text)
-		}
-		line := g + " " + text
-		if i == m.cursor {
-			style := styles.SelectedRow.Width(m.listWidth)
-			if m.focus == FocusDiff {
-				// Dim the selection marker when focus is on the diff so it's clear
-				// j/k now move within the diff.
-				style = styles.SelectedRowInactive.Width(m.listWidth)
-			}
-			// Re-render the plain (uncolorized) row so the selection bg/contrast
-			// stays legible across themes instead of fighting glyph/tint colors.
-			plain := gl + " " + label(r.File)
-			line = style.Render(plain)
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
+	cells := m.listCells()
+	h := m.totalHeight
+	start := m.listOffset
+	if h < 1 {
+		h = len(cells)
+		start = 0
 	}
-	return strings.TrimRight(b.String(), "\n")
+	if start > len(cells)-h {
+		start = len(cells) - h
+	}
+	if start < 0 {
+		start = 0
+	}
+	end := start + h
+	if end > len(cells) {
+		end = len(cells)
+	}
+	lines := make([]string, 0, end-start)
+	for _, c := range cells[start:end] {
+		lines = append(lines, c.text)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// listCells builds every screen line of the list, in order: per non-empty group
+// a blank separator (except before the first) + a header, then the group's files
+// rendered as a folder tree — directory nodes plus indented, wrapped file rows.
+func (m *Model) listCells() []listCell {
+	bodyWidth := m.listWidth - selectBarWidth
+	if bodyWidth < 1 {
+		bodyWidth = m.listWidth
+	}
+	var cells []listCell
+	first := true
+	for i := 0; i < len(m.rows); {
+		g := m.rows[i].Group
+		start := i
+		for i < len(m.rows) && m.rows[i].Group == g {
+			i++
+		}
+		if !first {
+			cells = append(cells, listCell{text: "", row: -1})
+		}
+		first = false
+		cells = append(cells, listCell{text: renderGroupHeader(g, i-start, m.listWidth), row: -1})
+
+		// Emit a folder tree for this group's (already path-sorted) files. Folder
+		// nodes are emitted lazily whenever the directory prefix changes.
+		var prevDirs []string
+		for k := start; k < i; k++ {
+			r := m.rows[k]
+			dirs, base := splitPath(r.File.Path)
+			leaf := base
+			if r.File.OrigPath != "" { // rename: show old → new basenames
+				_, ob := splitPath(r.File.OrigPath)
+				leaf = ob + " → " + base
+			}
+			common := commonPrefixLen(prevDirs, dirs)
+			for d := common; d < len(dirs); d++ {
+				cells = append(cells, listCell{text: m.renderFolderLine(dirs[d], d, bodyWidth), row: -1})
+			}
+			for _, ln := range m.renderFileLines(k, r, len(dirs), leaf, bodyWidth) {
+				cells = append(cells, listCell{text: ln, row: k})
+			}
+			prevDirs = dirs
+		}
+	}
+	return cells
+}
+
+// selectBarWidth is the width of the left state-bar column on each file row.
+const selectBarWidth = 1
+
+// indentStep is the per-tree-level indentation in columns.
+const indentStep = 2
+
+// splitPath splits a slash path into its directory components and base name.
+func splitPath(p string) (dirs []string, base string) {
+	if p == "" {
+		return nil, ""
+	}
+	parts := strings.Split(p, "/")
+	return parts[:len(parts)-1], parts[len(parts)-1]
+}
+
+// commonPrefixLen returns how many leading components a and b share.
+func commonPrefixLen(a, b []string) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return i
+}
+
+// clampIndent caps an indent so a deep tree on a narrow pane still leaves room
+// for a few label columns (preventing 1-column-at-a-time wrapping).
+func clampIndent(indent, bodyWidth int) int {
+	maxIndent := bodyWidth - 6
+	if maxIndent < 0 {
+		maxIndent = 0
+	}
+	if indent > maxIndent {
+		indent = maxIndent
+	}
+	if indent < 0 {
+		indent = 0
+	}
+	return indent
+}
+
+// renderFolderLine renders a directory node ("name/") at the given depth. Folder
+// nodes are not selectable (row -1) and are styled subordinate to file rows.
+func (m *Model) renderFolderLine(name string, depth, bodyWidth int) string {
+	indent := clampIndent(depth*indentStep, bodyWidth)
+	text := truncCells(strings.Repeat(" ", indent)+name+"/", bodyWidth)
+	return " " + styles.Folder.Width(bodyWidth).Render(text)
+}
+
+// renderFileLines renders one file as one or more screen lines: a left state bar
+// (▌ selected / ▎ diff-focused / blank), tree indentation, the status glyph, and
+// the leaf label — which WRAPS onto continuation lines (indented to align under
+// the label) when it exceeds the pane, so names stay readable. The state bar
+// repeats down every wrapped line so the selected file reads as one block.
+func (m *Model) renderFileLines(i int, r Row, depth int, leaf string, bodyWidth int) []string {
+	gl := glyph(r.Group, r.File)
+
+	var style lipgloss.Style
+	var bar string
+	plainText := false // selected rows render plain text for legible contrast
+	switch {
+	case i == m.cursor && m.focus != FocusDiff:
+		style, bar, plainText = styles.SelectedRow, styles.Branch.Render("▌"), true
+	case i == m.cursor:
+		style, bar, plainText = styles.SelectedRowInactive, styles.HeaderMuted.Render("▎"), true
+	case i == m.hoverRow:
+		style, bar = styles.HoverRow, " "
+	default:
+		style, bar = lipgloss.NewStyle(), " "
+	}
+
+	indent := clampIndent(depth*indentStep, bodyWidth)
+	pad := strings.Repeat(" ", indent)
+	// First line: indent + glyph + space; continuations align under the label.
+	chunkW := bodyWidth - indent - 2
+	if chunkW < 1 {
+		chunkW = 1
+	}
+	chunks := chunkByWidth(leaf, chunkW)
+
+	out := make([]string, 0, len(chunks))
+	for j, ch := range chunks {
+		var prefix string
+		switch {
+		case j > 0:
+			prefix = pad + "  "
+		case plainText:
+			prefix = pad + gl + " "
+		default:
+			prefix = pad + styles.GlyphStyle(gl).Render(gl) + " "
+		}
+		text := ch
+		if !plainText && r.Group == GroupUntracked {
+			text = styles.UntrackedRow.Render(ch)
+		}
+		out = append(out, bar+style.Width(bodyWidth).Render(prefix+text))
+	}
+	return out
+}
+
+// chunkByWidth splits s into substrings each at most w display columns wide
+// (cell-accurate, so it matches what the renderer/hit-test see). Always returns
+// at least one chunk.
+func chunkByWidth(s string, w int) []string {
+	if w < 1 {
+		w = 1
+	}
+	total := ansi.StringWidth(s)
+	if total == 0 {
+		return []string{""}
+	}
+	var chunks []string
+	for off := 0; off < total; off += w {
+		chunks = append(chunks, ansi.Cut(s, off, off+w))
+	}
+	return chunks
+}
+
+// cursorCellRange returns the first and last screen-line indices spanned by the
+// selected row (or -1,-1) and the total cell count. Used by the scroll math.
+func (m *Model) cursorCellRange() (first, last, total int) {
+	cells := m.listCells()
+	first, last = -1, -1
+	for idx, c := range cells {
+		if c.row == m.cursor {
+			if first < 0 {
+				first = idx
+			}
+			last = idx
+		}
+	}
+	return first, last, len(cells)
+}
+
+// ensureSelectedVisible adjusts listOffset so the selected file row stays within
+// the visible list window (the file pane scrolls to follow the selection). When
+// the selected row is taller than the pane it pins to the row's first line.
+func (m *Model) ensureSelectedVisible() {
+	h := m.totalHeight
+	if h < 1 {
+		return
+	}
+	first, last, total := m.cursorCellRange()
+	if first < 0 {
+		m.listOffset = 0
+		return
+	}
+	if first < m.listOffset {
+		m.listOffset = first
+	} else if last >= m.listOffset+h {
+		m.listOffset = last - h + 1
+		if m.listOffset > first {
+			m.listOffset = first // row taller than the pane: show its start
+		}
+	}
+	if maxOffset := total - h; m.listOffset > maxOffset {
+		m.listOffset = maxOffset
+	}
+	if m.listOffset < 0 {
+		m.listOffset = 0
+	}
+}
+
+// truncCells truncates s (ANSI-aware) to at most w display columns, appending an
+// ellipsis when it cuts. Used for group-header banners (which never wrap).
+func truncCells(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	return ansi.Truncate(s, w, "…")
 }
 
 // renderGroupHeader renders a distinct, per-group header with a count badge,
@@ -649,10 +981,13 @@ func (m *Model) renderList() string {
 func renderGroupHeader(g Group, count int, width int) string {
 	badge := fmt.Sprintf("(%d)", count)
 	banner := func(style lipgloss.Style) string {
+		text := groupName(g) + " " + badge
 		if width > 0 {
+			// Truncate before padding so a narrow pane can't make the banner wrap.
+			text = truncCells(text, width)
 			style = style.Width(width)
 		}
-		return style.Render(groupName(g) + " " + badge)
+		return style.Render(text)
 	}
 	switch g {
 	case GroupUnstaged:
@@ -664,30 +999,20 @@ func renderGroupHeader(g Group, count int, width int) string {
 	}
 }
 
-// GroupRowRange returns the [start,end) row indices spanned by each group in the
-// flattened list — used by the mouse hit-test to translate a list y-coordinate
-// (which includes group-header lines) into a row index.
+// ListLineToRow maps an on-screen body line (0 at the top of the list pane) to a
+// file row index, accounting for the scroll offset and wrapped rows. Returns
+// false for header / blank / out-of-range lines. It derives from the same
+// listCells the list is rendered from, so the mapping is always exact.
 func (m *Model) ListLineToRow(line int) (int, bool) {
-	// The list renders, per non-empty group: 1 header line then its rows.
-	cur := 0 // current rendered line within the list body
-	lastGroup := Group(-1)
-	for i, r := range m.rows {
-		if r.Group != lastGroup {
-			if lastGroup != -1 {
-				cur++ // blank separator line between groups
-			}
-			if line == cur {
-				return -1, false // clicked the header line
-			}
-			cur++ // header line
-			lastGroup = r.Group
-		}
-		if line == cur {
-			return i, true
-		}
-		cur++
+	cells := m.listCells()
+	idx := line + m.listOffset
+	if idx < 0 || idx >= len(cells) {
+		return -1, false
 	}
-	return -1, false
+	if cells[idx].row < 0 {
+		return -1, false
+	}
+	return cells[idx].row, true
 }
 
 func (m *Model) renderDiff() string {

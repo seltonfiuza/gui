@@ -14,7 +14,7 @@ import (
 // stays a plain colored label without a background.
 func TestUnstagedUntrackedHeadersHaveBackground(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor) // deterministic in non-TTY
-	const bgSGR = "48;2;"                        // truecolor background introducer
+	const bgSGR = "48;2;"                       // truecolor background introducer
 	staged := renderGroupHeader(GroupStaged, 1, 30)
 	unstaged := renderGroupHeader(GroupUnstaged, 1, 30)
 	untracked := renderGroupHeader(GroupUntracked, 1, 30)

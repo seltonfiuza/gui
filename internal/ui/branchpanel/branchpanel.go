@@ -241,50 +241,92 @@ func (m *Model) EscalateToForceDelete(name string) {
 // IntentNoneIntent is a tiny helper to keep call sites terse.
 func IntentNoneIntent() Intent { return Intent{Kind: IntentNone} }
 
-// View renders the overlay centered in the given area.
+// View renders the overlay centered in the given area. The branch list is
+// windowed to fit the available height (keeping the selected branch visible), so
+// a repo with many branches never overflows the screen.
 func (m *Model) View(width, height int) string {
-	var b strings.Builder
-	b.WriteString(styles.OverlayTitle.Render("Branches"))
-	b.WriteString("\n\n")
+	title := []string{styles.OverlayTitle.Render("Branches"), ""}
 
-	b.WriteString(styles.GroupHeader.Render("Local"))
-	b.WriteByte('\n')
+	// Scrollable middle: section headers + branch rows. Record the rendered line
+	// holding the cursor so the window can keep it in view.
+	var mid []string
+	cursorLine := 0
+	mid = append(mid, styles.GroupHeader.Render("Local"))
 	idx := 0
 	for _, br := range m.local {
-		b.WriteString(m.renderRow(idx, br))
-		b.WriteByte('\n')
+		if idx == m.cursor {
+			cursorLine = len(mid)
+		}
+		mid = append(mid, m.renderRow(idx, br))
 		idx++
 	}
 	if len(m.local) == 0 {
-		b.WriteString(styles.Desc.Render("  (none)\n"))
+		mid = append(mid, styles.Desc.Render("  (none)"))
 	}
-
-	b.WriteByte('\n')
-	b.WriteString(styles.GroupHeader.Render("Remote-tracking"))
-	b.WriteByte('\n')
+	mid = append(mid, "", styles.GroupHeader.Render("Remote-tracking"))
 	for _, br := range m.remote {
-		b.WriteString(m.renderRow(idx, br))
-		b.WriteByte('\n')
+		if idx == m.cursor {
+			cursorLine = len(mid)
+		}
+		mid = append(mid, m.renderRow(idx, br))
 		idx++
 	}
 	if len(m.remote) == 0 {
-		b.WriteString(styles.Desc.Render("  (none)\n"))
+		mid = append(mid, styles.Desc.Render("  (none)"))
 	}
 
+	// Trailing controls / prompt / inline error (always shown).
+	var tail []string
 	switch m.mode {
 	case modeCreate:
-		b.WriteString("\n" + m.input.View())
+		tail = append(tail, "", m.input.View())
 	case modeConfirm:
-		b.WriteString("\n" + styles.Inline.Render(m.prompt))
+		tail = append(tail, "", styles.Inline.Render(m.prompt))
 	default:
-		b.WriteString("\n" + styles.Desc.Render("enter/c checkout · n new · d delete · R rebase · esc close"))
+		tail = append(tail, "", styles.Desc.Render("enter/c checkout · n new · d delete · R rebase · esc close"))
 	}
 	if m.errMsg != "" {
-		b.WriteString("\n" + styles.Inline.Render(m.errMsg))
+		tail = append(tail, styles.Inline.Render(m.errMsg))
 	}
 
-	box := styles.Overlay.Render(b.String())
+	// Window the middle so title + middle + tail fit within the box chrome
+	// (rounded border + vertical padding = 4 rows).
+	budget := height - 4 - len(title) - len(tail)
+	mid = windowLines(mid, cursorLine, budget)
+
+	rows := append(append(append([]string{}, title...), mid...), tail...)
+	box := styles.Overlay.Render(strings.Join(rows, "\n"))
 	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
+}
+
+// windowLines returns a slice of at most budget lines that always includes the
+// focus line, marking truncated ends with a "more" indicator. When everything
+// fits it returns lines unchanged.
+func windowLines(lines []string, focus, budget int) []string {
+	if budget < 1 {
+		// No room for any list rows: keep the always-shown title/tail rather than
+		// forcing a row that would push the box past the available height.
+		return nil
+	}
+	if len(lines) <= budget {
+		return lines
+	}
+	start := focus - budget/2
+	if start < 0 {
+		start = 0
+	}
+	if start+budget > len(lines) {
+		start = len(lines) - budget
+	}
+	out := make([]string, budget)
+	copy(out, lines[start:start+budget])
+	if start > 0 {
+		out[0] = styles.Desc.Render("  ↑ more")
+	}
+	if start+budget < len(lines) {
+		out[budget-1] = styles.Desc.Render("  ↓ more")
+	}
+	return out
 }
 
 func (m *Model) renderRow(idx int, br git.Branch) string {

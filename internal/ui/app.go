@@ -15,6 +15,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/selton/gui/internal/config"
 	"github.com/selton/gui/internal/git"
@@ -181,9 +182,10 @@ func New(repo *git.Service) tea.Model {
 }
 
 // Init fires the initial status + remote loads, starts the auto-refresh tick,
-// and enables mouse cell-motion so clicks/scroll/drag are delivered to Update.
+// and enables all-motion mouse tracking so clicks/scroll/drag AND hover (motion
+// with no button) are delivered to Update — the latter drives hover highlights.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), scheduleTick(), tea.EnableMouseCellMotion)
+	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), scheduleTick(), tea.EnableMouseAllMotion)
 }
 
 // ---- commands ----
@@ -491,11 +493,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // currentLayout snapshots the geometry the mouse hit-test needs.
 func (a *App) currentLayout() layout {
 	return layout{
-		headerHeight: 1,
-		bodyHeight:   a.bodyHeight(),
-		width:        a.width,
-		listWidth:    a.listWidth,
-		diffYOffset:  a.diff.ViewportYOffset(),
+		headerHeight:   1,
+		bodyHeight:     a.bodyHeight(),
+		width:          a.width,
+		listWidth:      a.listWidth,
+		scrollbarWidth: diffview.ScrollbarWidth,
+		diffYOffset:    a.diff.ViewportYOffset(),
 	}
 }
 
@@ -515,20 +518,28 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	h := hitTest(a.currentLayout(), msg.X, msg.Y)
 
+	// Wheel scroll acts on whatever region is under the pointer: the diff pane
+	// scrolls its content; the file list moves the file selection (and takes
+	// focus, so it's clear what j/k will now move). Wheel over the divider or
+	// outside the body is ignored.
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
-		if h.region == hitDiff {
+		switch h.region {
+		case hitDiff:
 			a.diff.ScrollDiff(-3)
-		} else {
-			a.diff.CursorUp()
+		case hitList:
+			a.diff.FocusList()
+			a.diff.SelectPrev()
 			return a, a.refreshDiffCmd()
 		}
 		return a, nil
 	case tea.MouseButtonWheelDown:
-		if h.region == hitDiff {
+		switch h.region {
+		case hitDiff:
 			a.diff.ScrollDiff(3)
-		} else {
-			a.diff.CursorDown()
+		case hitList:
+			a.diff.FocusList()
+			a.diff.SelectNext()
 			return a, a.refreshDiffCmd()
 		}
 		return a, nil
@@ -537,6 +548,19 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Drag in progress: resize the split to the pointer column.
 	if a.dragging && msg.Action == tea.MouseActionMotion {
 		a.resizeListTo(msg.X)
+		return a, nil
+	}
+
+	// Hover (motion with no button held): highlight the file row under the
+	// pointer. Purely cosmetic — it never changes the selection.
+	if msg.Action == tea.MouseActionMotion {
+		if h.region == hitList {
+			if row, ok := a.diff.ListLineToRow(h.line); ok {
+				a.diff.SetHoverRow(row)
+				return a, nil
+			}
+		}
+		a.diff.ClearHover()
 		return a, nil
 	}
 
@@ -926,12 +950,17 @@ func (a *App) View() string {
 	footer := a.renderFooter()
 
 	var body string
-	switch a.active {
-	case viewHelp:
+	switch {
+	case a.confirm != nil:
+		// A pending confirmation renders as a centered modal over the body, so the
+		// header/footer stay a single row each (the old footer-rendered bordered
+		// box overflowed the 1-row footer assumption).
+		body = a.renderConfirmOverlay(a.width, a.bodyHeight())
+	case a.active == viewHelp:
 		body = a.help.View(a.width, a.bodyHeight())
-	case viewBranch:
+	case a.active == viewBranch:
 		body = a.branch.View(a.width, a.bodyHeight())
-	case viewTheme:
+	case a.active == viewTheme:
 		body = a.theme.View(a.width, a.bodyHeight())
 	default:
 		body = a.diff.View()
@@ -1008,21 +1037,62 @@ func (a *App) renderHeader() string {
 	}
 
 	sep := styles.HeaderSep.Render(" · ")
-	return styles.Header.Render(strings.Join(segs, sep))
+	// Truncate to the inner width (total minus the Header's 1-col side padding) so
+	// a long path can never wrap to a second row and break the layout.
+	content := fitWidth(strings.Join(segs, sep), a.width-2)
+	return styles.Header.Render(content)
 }
 
-func (a *App) renderFooter() string {
+// footerHint returns the key hint line, abbreviated on narrow terminals so it
+// stays on one row instead of being aggressively ellipsized.
+func (a *App) footerHint() string {
+	if a.width < 100 {
+		return "j/k move · enter diff · s stage · u/U discard · ? help · q quit"
+	}
 	auto := "on"
 	if !a.autoRefresh {
 		auto = "off"
 	}
-	hint := "j/k move · enter focus diff · u hunk · U file · ctrl+r recover · } { hunk · < > resize · s stage · r refresh · ctrl+t auto:" + auto + " · space b branches · space t theme · ? help · q quit"
-	if a.confirm != nil {
-		return styles.Confirm.Render(a.confirm.prompt)
-	}
-	line := styles.Hint.Render(hint)
-	if a.toast != "" {
+	return "j/k move · enter focus diff · u hunk · U file · ctrl+r recover · } { hunk · < > resize · s stage · r refresh · ctrl+t auto:" + auto + " · space b branches · space t theme · ? help · q quit"
+}
+
+func (a *App) renderFooter() string {
+	var line string
+	switch {
+	case a.confirm != nil:
+		line = styles.Toast.Render("y confirm · n cancel")
+	case a.toast != "":
 		line = styles.Toast.Render(a.toast)
+	default:
+		line = styles.Hint.Render(a.footerHint())
 	}
-	return styles.Header.Render(line)
+	return styles.Header.Render(fitWidth(line, a.width-2))
+}
+
+// renderConfirmOverlay renders the pending confirmation as a centered modal.
+func (a *App) renderConfirmOverlay(width, height int) string {
+	if a.confirm == nil {
+		return ""
+	}
+	title := styles.OverlayTitle.Render("⚠  Confirm")
+	prompt := a.confirm.prompt
+	hint := styles.Desc.Render("y confirm · n cancel · esc")
+	box := styles.Confirm.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", prompt, "", hint))
+	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
+}
+
+// fitWidth truncates s (ANSI-aware) to at most w display columns, appending an
+// ellipsis when it had to cut. Returns "" for non-positive widths.
+func fitWidth(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	return ansi.Truncate(s, w, "…")
+}
+
+func maxi(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

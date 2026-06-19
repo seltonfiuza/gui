@@ -92,22 +92,56 @@ func (m *Model) applyCurrent() string {
 	return styles.SetTheme(m.names[m.cursor])
 }
 
-// View renders the centered picker overlay.
+// View renders the centered picker overlay, windowing the theme list to fit the
+// available height so it never renders off-screen on a short terminal.
 func (m Model) View(width, height int) string {
-	var b strings.Builder
-	b.WriteString(styles.OverlayTitle.Render("Theme"))
-	b.WriteString("\n\n")
+	title := []string{styles.OverlayTitle.Render("Theme"), ""}
+	var mid []string
+	cursorLine := 0
 	for i, n := range m.names {
-		row := "  " + n
 		if i == m.cursor {
-			row = styles.SelectedRow.Render("> " + n)
+			cursorLine = len(mid)
+			mid = append(mid, styles.SelectedRow.Render("> "+n))
+		} else {
+			mid = append(mid, "  "+n)
 		}
-		b.WriteString(row)
-		b.WriteByte('\n')
 	}
-	b.WriteString("\n" + styles.Desc.Render("j/k preview · enter apply · esc revert"))
-	box := styles.Overlay.Render(b.String())
+	tail := []string{"", styles.Desc.Render("j/k preview · enter apply · esc revert")}
+
+	budget := height - 4 - len(title) - len(tail)
+	mid = windowLines(mid, cursorLine, budget)
+	rows := append(append(append([]string{}, title...), mid...), tail...)
+	box := styles.Overlay.Render(strings.Join(rows, "\n"))
 	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
+}
+
+// windowLines returns at most budget lines, always including the focus line and
+// marking truncated ends. Returns lines unchanged when they already fit.
+func windowLines(lines []string, focus, budget int) []string {
+	if budget < 1 {
+		// No room for any list rows: keep the always-shown title/tail rather than
+		// forcing a row that would push the box past the available height.
+		return nil
+	}
+	if len(lines) <= budget {
+		return lines
+	}
+	start := focus - budget/2
+	if start < 0 {
+		start = 0
+	}
+	if start+budget > len(lines) {
+		start = len(lines) - budget
+	}
+	out := make([]string, budget)
+	copy(out, lines[start:start+budget])
+	if start > 0 {
+		out[0] = styles.Desc.Render("  ↑ more")
+	}
+	if start+budget < len(lines) {
+		out[budget-1] = styles.Desc.Render("  ↓ more")
+	}
+	return out
 }
 
 // Names returns the preset names in display order (for tests).

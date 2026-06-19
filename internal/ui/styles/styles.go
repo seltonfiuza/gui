@@ -37,11 +37,15 @@ var (
 	// UntrackedRow tints whole untracked rows so they read distinctly from
 	// modified files even before the glyph is noticed.
 	UntrackedRow lipgloss.Style
+	// Folder styles directory nodes in the file tree (subordinate to file rows).
+	Folder lipgloss.Style
 	// SelectedRow highlights the row under the cursor.
 	SelectedRow lipgloss.Style
 	// SelectedRowInactive highlights the file row when focus is on the diff pane
 	// (dimmer than SelectedRow so it's clear j/k move within the diff).
 	SelectedRowInactive lipgloss.Style
+	// HoverRow highlights the file row currently under the mouse pointer.
+	HoverRow lipgloss.Style
 	// DiffCursor highlights the current line under the diff line cursor.
 	DiffCursor lipgloss.Style
 	// Glyph styles the leading status letter (color applied per change type).
@@ -62,6 +66,10 @@ var (
 
 	// Divider styles the vertical bar between the list and diff panes.
 	Divider lipgloss.Style
+	// ScrollThumb is the filled part of the diff scrollbar (the current window).
+	ScrollThumb lipgloss.Style
+	// ScrollTrack is the unfilled part of the diff scrollbar.
+	ScrollTrack lipgloss.Style
 )
 
 // Footer / toast.
@@ -118,8 +126,10 @@ func Apply(p Palette) {
 
 	Row = lipgloss.NewStyle()
 	UntrackedRow = lipgloss.NewStyle().Foreground(col(p.UntrackedRowFg))
+	Folder = lipgloss.NewStyle().Foreground(col(p.Muted)).Bold(true)
 	SelectedRow = lipgloss.NewStyle().Background(col(p.SelectedBg)).Foreground(col(p.SelectedFg)).Bold(true)
 	SelectedRowInactive = lipgloss.NewStyle().Background(col(p.SelectedDimBg))
+	HoverRow = lipgloss.NewStyle().Background(col(p.HoverBg))
 	DiffCursor = lipgloss.NewStyle().Background(col(p.DiffCursor))
 	Glyph = lipgloss.NewStyle().Bold(true)
 	Clean = lipgloss.NewStyle().Foreground(col(p.Muted)).Italic(true)
@@ -131,6 +141,8 @@ func Apply(p Palette) {
 	DiffMeta = lipgloss.NewStyle().Foreground(col(p.DiffMeta))
 
 	Divider = lipgloss.NewStyle().Foreground(col(p.Divider))
+	ScrollThumb = lipgloss.NewStyle().Foreground(col(p.OverlayTitle))
+	ScrollTrack = lipgloss.NewStyle().Foreground(col(p.Divider))
 
 	Hint = lipgloss.NewStyle().Foreground(col(p.Footer))
 	Toast = lipgloss.NewStyle().Foreground(col(p.Error)).Bold(true)

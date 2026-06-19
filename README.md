@@ -142,18 +142,24 @@ the terminal's 256/16-color profile.
 
 Mouse support is enabled by default:
 
+- **Hover** a file row to highlight it under the pointer (cosmetic — it never
+  changes the selection).
 - **Click a file row** to select it and load its diff.
 - **Click in the diff pane** to focus it and move the line cursor to that line
   (the scroll offset is accounted for).
-- **Scroll wheel** scrolls whichever pane the pointer is over (list or diff).
+- **Scroll wheel** acts on whichever pane the pointer is over: over the diff it
+  scrolls the content; over the file list it moves the file selection (regardless
+  of which pane has keyboard focus). Wheeling over the divider or chrome is ignored.
 - **Drag the divider** between the list and diff to resize the split.
 
-Clicks inside overlays (branch / help / theme picker / confirm) are ignored so
-the keyboard flow is never disturbed, and keyboard-only usage is unchanged.
+A one-column **scrollbar** on the right edge of the diff shows your position and
+how much is off-screen. Clicks inside overlays (branch / help / theme picker /
+confirm) are ignored so the keyboard flow is never disturbed, and keyboard-only
+usage is unchanged.
 
-Trade-off: enabling mouse cell-motion means the terminal's own click-drag **text
-selection** is captured by the app. Use your terminal's modifier (often `Shift`)
-to select/copy text, or rely on the keyboard for everything.
+Trade-off: enabling all-motion mouse tracking (needed for hover) means the
+terminal's own click-drag **text selection** is captured by the app. Use your
+terminal's modifier (often `Shift`) to select/copy text, or rely on the keyboard.
 
 ### Branch panel (`<leader> b`)
 

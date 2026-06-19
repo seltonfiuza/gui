@@ -598,3 +598,104 @@ func TestToggleRawDiff(t *testing.T) {
 		t.Fatalf("ctrl+g should turn raw mode back off")
 	}
 }
+
+// --- robustness & mouse-hover regression tests (UI iteration) ---
+
+// TestViewFitsHeight asserts the rendered View is exactly a.height rows tall
+// across normal, narrow, and tiny sizes, and with a pending confirm overlay — so
+// a long header/footer or a confirm box can never break the header/body/footer
+// layout.
+func TestViewFitsHeight(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	cases := []struct{ w, h int }{{80, 24}, {40, 12}, {20, 8}, {200, 50}}
+	for _, c := range cases {
+		a := newTestApp()
+		a.width, a.height = c.w, c.h
+		a.applyLayout()
+		if got := lipgloss.Height(a.View()); got != c.h {
+			t.Errorf("View() height=%d want %d (size %dx%d)", got, c.h, c.w, c.h)
+		}
+		// With a confirmation pending the overlay must not change the height.
+		a.confirm = &confirmState{prompt: "Discard all changes in 'really/long/path/to/some/file/that/exceeds.go'?"}
+		if got := lipgloss.Height(a.View()); got != c.h {
+			t.Errorf("View()+confirm height=%d want %d (size %dx%d)", got, c.h, c.w, c.h)
+		}
+		a.confirm = nil
+		// Every overlay view must also keep the total height exact.
+		a.branch.SetBranches([]git.Branch{{Name: "main", IsCurrent: true}, {Name: "feature/x"}})
+		for _, v := range []view{viewBranch, viewTheme, viewHelp} {
+			a.active = v
+			if got := lipgloss.Height(a.View()); got != c.h {
+				t.Errorf("View() active=%d height=%d want %d (size %dx%d)", v, got, c.h, c.w, c.h)
+			}
+		}
+		a.active = viewDiff
+	}
+}
+
+// TestHeaderFooterSingleRow asserts header and footer stay one row even when the
+// repo path / hint would otherwise overflow a narrow terminal.
+func TestHeaderFooterSingleRow(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	a := newTestApp()
+	a.width, a.height = 30, 24
+	a.applyLayout()
+	if h := lipgloss.Height(a.renderHeader()); h != 1 {
+		t.Errorf("header should be 1 row, got %d", h)
+	}
+	if h := lipgloss.Height(a.renderFooter()); h != 1 {
+		t.Errorf("footer should be 1 row, got %d", h)
+	}
+	if w := lipgloss.Width(a.renderFooter()); w > a.width {
+		t.Errorf("footer width %d exceeds terminal width %d", w, a.width)
+	}
+}
+
+// TestWheelOverListMovesSelectionRegardlessOfFocus asserts wheeling over the
+// file list moves the FILE selection even when the diff pane has keyboard focus
+// (it must not move the diff line cursor).
+func TestWheelOverListMovesSelectionRegardlessOfFocus(t *testing.T) {
+	a := newTestApp()
+	a.diff.FocusDiff() // focus on the diff pane
+	first := a.diff.SelectedPath()
+	// Wheel down over the file list area (x in list pane, y on a file row).
+	_, _ = a.handleMouse(tea.MouseMsg{X: 2, Y: 2, Button: tea.MouseButtonWheelDown})
+	if a.diff.SelectedPath() == first {
+		t.Fatalf("wheel over list should advance file selection from %q", first)
+	}
+	if a.diff.Focus() != diffview.FocusList {
+		t.Fatalf("wheel over list should focus the list")
+	}
+}
+
+// TestWheelOutsideBodyIgnored asserts a wheel event in the header row (hitNone)
+// does not move the selection.
+func TestWheelOutsideBodyIgnored(t *testing.T) {
+	a := newTestApp()
+	before := a.diff.SelectedPath()
+	_, _ = a.handleMouse(tea.MouseMsg{X: 2, Y: 0, Button: tea.MouseButtonWheelDown})
+	if a.diff.SelectedPath() != before {
+		t.Fatalf("wheel in header should be ignored, selection moved %q->%q", before, a.diff.SelectedPath())
+	}
+}
+
+// TestHoverHighlightsRowUnderPointer asserts mouse motion over a file row sets
+// the hover row, and motion outside the list clears it — without changing the
+// selection.
+func TestHoverHighlightsRowUnderPointer(t *testing.T) {
+	a := newTestApp()
+	sel := a.diff.SelectedPath()
+	// Motion over b.go's row (body line 4 -> screen y=5) in the list pane.
+	_, _ = a.handleMouse(tea.MouseMsg{X: 2, Y: 5, Action: tea.MouseActionMotion})
+	if a.diff.HoverRow() < 0 {
+		t.Fatalf("motion over a file row should set a hover row")
+	}
+	if a.diff.SelectedPath() != sel {
+		t.Fatalf("hover must not change selection (%q -> %q)", sel, a.diff.SelectedPath())
+	}
+	// Motion into the diff pane clears the hover.
+	_, _ = a.handleMouse(tea.MouseMsg{X: a.listWidth + 5, Y: 3, Action: tea.MouseActionMotion})
+	if a.diff.HoverRow() != -1 {
+		t.Fatalf("motion outside the list should clear hover, got %d", a.diff.HoverRow())
+	}
+}
