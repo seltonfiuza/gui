@@ -25,6 +25,29 @@ On launch it detects the repository root (`git rev-parse --show-toplevel`) and
 opens straight into the diff view for the current working tree — no subcommand
 needed. If you are not inside a git repository it prints a clear message and exits.
 
+## Neovim integration (`:Gui`)
+
+A small Neovim plugin lives in [`contrib/nvim`](contrib/nvim) that opens the TUI
+in a floating terminal with `:Gui` (the same pattern as `lazygit.nvim`). Build the
+binary onto your `PATH` first (`go install .`), then with **lazy.nvim**:
+
+```lua
+{
+  "seltonfiuza/gui",
+  build = "go install .",
+  cmd = "Gui",
+  keys = { { "<leader>gg", "<cmd>Gui<cr>", desc = "gui git TUI" } },
+  config = function()
+    vim.opt.runtimepath:append(vim.fn.stdpath("data") .. "/lazy/gui/contrib/nvim")
+    require("gui").setup()
+  end,
+}
+```
+
+`:Gui` opens the TUI in a centered float; `q` closes it and refreshes your
+buffers. See [`contrib/nvim/README.md`](contrib/nvim/README.md) for manual
+installation and configuration options.
+
 ## Layout
 
 ```
