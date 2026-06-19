@@ -5,7 +5,7 @@ package github
 import (
 	"errors"
 
-	"github.com/selton/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/git"
 )
 
 // Host is a GitHub hostname (github.com or an enterprise host).

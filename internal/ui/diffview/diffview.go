@@ -23,8 +23,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/selton/gui/internal/git"
-	"github.com/selton/gui/internal/ui/styles"
+	"github.com/seltonfiuza/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/ui/styles"
 )
 
 // Group identifies which of the three sections a file row belongs to.

@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
-	"github.com/selton/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/git"
 )
 
 // TestUnstagedUntrackedHeadersHaveBackground asserts the Unstaged and Untracked

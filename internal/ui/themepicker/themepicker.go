@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/selton/gui/internal/ui/styles"
+	"github.com/seltonfiuza/gui/internal/ui/styles"
 )
 
 // ResultKind is the outcome of a key handled by the picker.

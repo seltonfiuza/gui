@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/selton/gui/internal/ui/styles"
+	"github.com/seltonfiuza/gui/internal/ui/styles"
 )
 
 // lineKind classifies a cleaned diff line for styling.

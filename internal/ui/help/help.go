@@ -7,8 +7,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/selton/gui/internal/config"
-	"github.com/selton/gui/internal/ui/styles"
+	"github.com/seltonfiuza/gui/internal/config"
+	"github.com/seltonfiuza/gui/internal/ui/styles"
 )
 
 // Model is the help overlay.

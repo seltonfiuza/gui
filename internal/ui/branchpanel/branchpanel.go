@@ -14,8 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/selton/gui/internal/git"
-	"github.com/selton/gui/internal/ui/styles"
+	"github.com/seltonfiuza/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/ui/styles"
 )
 
 // IntentKind is the type of git action the user requested from the panel.

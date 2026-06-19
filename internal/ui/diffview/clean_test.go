@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/selton/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/git"
 )
 
 const fileDiff = `diff --git a/b.go b/b.go

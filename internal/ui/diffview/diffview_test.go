@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
-	"github.com/selton/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/git"
 )
 
 const twoHunkDiff = `diff --git a/b.go b/b.go

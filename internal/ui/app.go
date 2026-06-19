@@ -17,13 +17,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/selton/gui/internal/config"
-	"github.com/selton/gui/internal/git"
-	"github.com/selton/gui/internal/ui/branchpanel"
-	"github.com/selton/gui/internal/ui/diffview"
-	"github.com/selton/gui/internal/ui/help"
-	"github.com/selton/gui/internal/ui/styles"
-	"github.com/selton/gui/internal/ui/themepicker"
+	"github.com/seltonfiuza/gui/internal/config"
+	"github.com/seltonfiuza/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/ui/branchpanel"
+	"github.com/seltonfiuza/gui/internal/ui/diffview"
+	"github.com/seltonfiuza/gui/internal/ui/help"
+	"github.com/seltonfiuza/gui/internal/ui/styles"
+	"github.com/seltonfiuza/gui/internal/ui/themepicker"
 )
 
 // view enumerates the active top-level view.

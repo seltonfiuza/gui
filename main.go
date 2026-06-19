@@ -9,8 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/selton/gui/internal/git"
-	"github.com/selton/gui/internal/ui"
+	"github.com/seltonfiuza/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/ui"
 )
 
 // Build metadata, injected at release time via -ldflags -X (see .goreleaser.yaml).

@@ -34,7 +34,7 @@ your platform, extract, and put `gui` on your `PATH`. For example on macOS arm64
 ```sh
 VER=0.1.0   # see the Releases page for the latest
 curl -sSL -o gui.tar.gz \
-  https://github.com/selton/gui/releases/download/v${VER}/gui_${VER}_darwin_arm64.tar.gz
+  https://github.com/seltonfiuza/gui/releases/download/v${VER}/gui_${VER}_darwin_arm64.tar.gz
 tar -xzf gui.tar.gz
 sudo mv gui /usr/local/bin/   # or any dir on your PATH
 gui --version
@@ -43,7 +43,7 @@ gui --version
 **From source:**
 
 ```sh
-go install github.com/selton/gui@latest   # puts `gui` in $(go env GOPATH)/bin
+go install github.com/seltonfiuza/gui@latest   # puts `gui` in $(go env GOPATH)/bin
 # or, in a clone:
 go build -o gui . && ./gui
 ```

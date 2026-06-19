@@ -1,4 +1,4 @@
-module github.com/selton/gui
+module github.com/seltonfiuza/gui
 
 go 1.25.3
 
