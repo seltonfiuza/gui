@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -20,7 +21,22 @@ var (
 	date    = "unknown"
 )
 
+// resolveVersion falls back to the module version embedded by the Go toolchain
+// when ldflags weren't applied — so `go install …@vX.Y.Z` binaries report their
+// version instead of "dev". GoReleaser builds already set `version` via -X.
+func resolveVersion() {
+	if version != "dev" {
+		return
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := bi.Main.Version; v != "" && v != "(devel)" {
+			version = v
+		}
+	}
+}
+
 func main() {
+	resolveVersion()
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "--version", "-v", "version":
