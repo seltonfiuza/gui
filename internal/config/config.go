@@ -26,6 +26,16 @@ const (
 	ActBranchPanel
 	ActPRList
 	ActCancel
+	// Appended in checklist 01 (granular undo + resizable layout). Keep these at
+	// the end so existing iota values are unchanged.
+	ActUndoFile   // U: discard the whole file (with confirmation)
+	ActRecover    // ctrl+r: restore the most recently discarded change
+	ActPaneGrow   // >: grow the diff pane / shrink the file list
+	ActPaneShrink // <: shrink the diff pane / grow the file list
+	ActHunkNext   // }: jump to next hunk in the diff
+	ActHunkPrev   // {: jump to previous hunk in the diff
+	// Appended in checklist 02 (near real-time refresh). Keep at the end.
+	ActToggleAutoRefresh // ctrl+t: turn the background auto-refresh tick on/off
 )
 
 // Keymap maps keys/chords to actions. Leader is the chord prefix.
@@ -53,6 +63,13 @@ func DefaultKeymap() Keymap {
 			"enter":  ActConfirm,
 			"s":      ActStageToggle,
 			"u":      ActUndo,
+			"U":      ActUndoFile,
+			"ctrl+r": ActRecover,
+			">":      ActPaneGrow,
+			"<":      ActPaneShrink,
+			"}":      ActHunkNext,
+			"{":      ActHunkPrev,
+			"ctrl+t": ActToggleAutoRefresh,
 			"esc":    ActCancel,
 		},
 		chords: map[string]Action{
@@ -65,12 +82,19 @@ func DefaultKeymap() Keymap {
 // order.
 func (k Keymap) Bindings() []Binding {
 	return []Binding{
-		{Keys: []string{"j", "down"}, Action: ActDown, Desc: "Move down"},
-		{Keys: []string{"k", "up"}, Action: ActUp, Desc: "Move up"},
+		{Keys: []string{"j", "down"}, Action: ActDown, Desc: "Move down (by line within a diff)"},
+		{Keys: []string{"k", "up"}, Action: ActUp, Desc: "Move up (by line within a diff)"},
 		{Keys: []string{"enter"}, Action: ActConfirm, Desc: "Open / confirm"},
 		{Keys: []string{"s"}, Action: ActStageToggle, Desc: "Stage / unstage selected file"},
-		{Keys: []string{"u"}, Action: ActUndo, Desc: "Discard / undo selected change"},
+		{Keys: []string{"u"}, Action: ActUndo, Desc: "Discard the change under the cursor (hunk)"},
+		{Keys: []string{"U"}, Action: ActUndoFile, Desc: "Discard the whole file (confirm)"},
+		{Keys: []string{"ctrl+r"}, Action: ActRecover, Desc: "Recover the last discarded change"},
+		{Keys: []string{"}"}, Action: ActHunkNext, Desc: "Next hunk"},
+		{Keys: []string{"{"}, Action: ActHunkPrev, Desc: "Previous hunk"},
+		{Keys: []string{">"}, Action: ActPaneGrow, Desc: "Grow the diff pane"},
+		{Keys: []string{"<"}, Action: ActPaneShrink, Desc: "Shrink the diff pane"},
 		{Keys: []string{"r"}, Action: ActRefresh, Desc: "Refresh status"},
+		{Keys: []string{"ctrl+t"}, Action: ActToggleAutoRefresh, Desc: "Toggle auto-refresh on/off"},
 		{Keys: []string{"<leader> b"}, Action: ActBranchPanel, Desc: "Open branch panel"},
 		{Keys: []string{"?"}, Action: ActHelp, Desc: "Toggle help overlay"},
 		{Keys: []string{"esc"}, Action: ActCancel, Desc: "Cancel / close overlay"},

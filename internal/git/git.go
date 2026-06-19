@@ -338,6 +338,174 @@ func (s *Service) diffUntracked(path string) (string, bool) {
 	return out.String(), true
 }
 
+// Hunk is one @@ block of a file's unified diff, carrying a self-contained,
+// applyable single-hunk patch (file header + this one hunk).
+type Hunk struct {
+	Header    string   // the "@@ -a,b +c,d @@" line
+	Body      []string // hunk body lines (context / + / -), excluding the @@ header
+	OldStart  int      // old-file start line (from @@)
+	NewStart  int      // new-file start line (from @@)
+	StartLine int      // 0-based line index of the @@ header within the full diff text
+	EndLine   int      // 0-based line index of this hunk's last body line within the diff
+	Patch     string   // a complete patch (file header + this hunk) applyable via git apply
+}
+
+// ParseHunks splits a unified diff (as returned by Diff) into hunks. Each Hunk's
+// Patch is self-contained (the file's "diff --git"/"---"/"+++" header plus the
+// single @@ block) so it can be fed to ApplyPatch. Returns an empty slice for an
+// empty diff. No git invocation.
+func ParseHunks(diff string) ([]Hunk, error) {
+	if strings.TrimSpace(diff) == "" {
+		return nil, nil
+	}
+	lines := strings.Split(diff, "\n")
+
+	// Locate the first @@ header. Everything before it is the file header.
+	firstHunk := -1
+	for i, ln := range lines {
+		if strings.HasPrefix(ln, "@@") {
+			firstHunk = i
+			break
+		}
+	}
+	if firstHunk == -1 {
+		// No hunks at all (e.g. pure mode change / binary): nothing to parse.
+		return nil, nil
+	}
+	header := strings.Join(lines[:firstHunk], "\n")
+
+	var hunks []Hunk
+	for i := firstHunk; i < len(lines); i++ {
+		ln := lines[i]
+		if !strings.HasPrefix(ln, "@@") {
+			continue
+		}
+		old, new := parseHunkHeader(ln)
+		h := Hunk{
+			Header:    ln,
+			OldStart:  old,
+			NewStart:  new,
+			StartLine: i,
+		}
+		// Body runs until the next @@, the next file's "diff --git", or EOF.
+		end := i
+		var body []string
+		for j := i + 1; j < len(lines); j++ {
+			nxt := lines[j]
+			if strings.HasPrefix(nxt, "@@") || strings.HasPrefix(nxt, "diff --git") {
+				break
+			}
+			body = append(body, nxt)
+			end = j
+		}
+		// Trim a single trailing empty element that results from a diff that ends
+		// with a newline (strings.Split yields a final ""). Keep it out of both the
+		// body and the EndLine accounting only when it is the very last line and empty.
+		if end == len(lines)-1 && len(body) > 0 && body[len(body)-1] == "" {
+			body = body[:len(body)-1]
+			end--
+		}
+		h.Body = body
+		h.EndLine = end
+
+		// Build a self-contained, applyable patch: file header + this hunk.
+		var sb strings.Builder
+		if header != "" {
+			sb.WriteString(header)
+			sb.WriteString("\n")
+		}
+		sb.WriteString(h.Header)
+		sb.WriteString("\n")
+		for _, b := range body {
+			sb.WriteString(b)
+			sb.WriteString("\n")
+		}
+		h.Patch = sb.String()
+
+		hunks = append(hunks, h)
+	}
+	return hunks, nil
+}
+
+// parseHunkHeader extracts OldStart and NewStart from "@@ -a,b +c,d @@".
+// Robust against malformed input: missing numbers default to 0.
+func parseHunkHeader(line string) (oldStart, newStart int) {
+	// Format: @@ -<oldStart>[,<oldLen>] +<newStart>[,<newLen>] @@ ...
+	fields := strings.Fields(line)
+	for _, f := range fields {
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case '-':
+			oldStart = leadingInt(f[1:])
+		case '+':
+			newStart = leadingInt(f[1:])
+		}
+	}
+	return oldStart, newStart
+}
+
+// leadingInt parses the integer prefix of s (up to the first non-digit, e.g. ",").
+func leadingInt(s string) int {
+	end := 0
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(s[:end])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// HunkAtLine returns the index into hunks whose body contains the given 0-based
+// line index in the full diff text, or -1 if the line is in a header / none.
+func HunkAtLine(hunks []Hunk, line int) int {
+	for i, h := range hunks {
+		if line >= h.StartLine && line <= h.EndLine {
+			return i
+		}
+	}
+	return -1
+}
+
+// ApplyPatch applies patch via `git apply`. reverse adds --reverse (used to
+// discard a hunk from the worktree); cached adds --cached (index). The patch
+// should be a self-contained unified diff (e.g. a Hunk.Patch).
+func (s *Service) ApplyPatch(patch string, reverse, cached bool) error {
+	args := []string{"apply", "--recount", "--whitespace=nowarn"}
+	if reverse {
+		args = append(args, "--reverse")
+	}
+	if cached {
+		args = append(args, "--cached")
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = s.root
+	cmd.Stdin = strings.NewReader(patch)
+	var out, stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git apply: %s", msg)
+	}
+	return nil
+}
+
+// DiscardUntracked removes an untracked path from the worktree (git clean -fd).
+func (s *Service) DiscardUntracked(path string) error {
+	_, err := s.run("clean", "-fd", "--", path)
+	return err
+}
+
 // OriginRemote returns the parsed origin remote, or ErrNoRemote.
 func (s *Service) OriginRemote() (*Remote, error) {
 	out, err := s.run("remote", "get-url", "origin")

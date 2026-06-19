@@ -105,6 +105,12 @@ func (m *Model) SetBranches(branches []git.Branch) {
 	}
 }
 
+// Inputting reports whether the panel is mid-interaction in a way a background
+// refresh must not disturb: a text-entry prompt (create) or a confirm dialog.
+func (m *Model) Inputting() bool {
+	return m.mode == modeCreate || m.mode == modeConfirm
+}
+
 // SetError shows an inline error message in the overlay and returns to the list.
 func (m *Model) SetError(msg string) {
 	m.errMsg = msg

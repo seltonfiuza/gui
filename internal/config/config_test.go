@@ -47,6 +47,12 @@ func TestResolveDirectBindings(t *testing.T) {
 		"enter":  ActConfirm,
 		"s":      ActStageToggle,
 		"u":      ActUndo,
+		"U":      ActUndoFile,
+		"ctrl+r": ActRecover,
+		">":      ActPaneGrow,
+		"<":      ActPaneShrink,
+		"}":      ActHunkNext,
+		"{":      ActHunkPrev,
 		"esc":    ActCancel,
 	}
 	for key, want := range cases {
@@ -118,5 +124,18 @@ func TestBindings(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("Bindings() missing ActBranchPanel entry")
+	}
+
+	for _, want := range []Action{ActUndoFile, ActRecover} {
+		ok := false
+		for _, b := range bs {
+			if b.Action == want {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			t.Errorf("Bindings() missing entry for action %v", want)
+		}
 	}
 }

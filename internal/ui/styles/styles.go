@@ -16,6 +16,7 @@ var (
 	colorHunk    = lipgloss.Color("#7DCFFF") // cyan
 	colorError   = lipgloss.Color("#DB4B4B")
 	colorSel     = lipgloss.Color("#283457")
+	colorCursor  = lipgloss.Color("#3D59A1") // diff line cursor highlight (brighter than colorSel)
 	colorGroup   = lipgloss.Color("#BB9AF7") // purple
 	colorBorder  = lipgloss.AdaptiveColor{Light: "#8087A2", Dark: "#3B4261"}
 	colorHint    = lipgloss.AdaptiveColor{Light: "#6C6F85", Dark: "#737AA2"}
@@ -41,6 +42,11 @@ var (
 	Row = lipgloss.NewStyle()
 	// SelectedRow highlights the row under the cursor.
 	SelectedRow = lipgloss.NewStyle().Background(colorSel).Bold(true)
+	// SelectedRowInactive highlights the file row when focus is on the diff pane
+	// (dimmer than SelectedRow so it's clear j/k move within the diff).
+	SelectedRowInactive = lipgloss.NewStyle().Background(colorSel)
+	// DiffCursor highlights the current line under the diff line cursor.
+	DiffCursor = lipgloss.NewStyle().Background(colorCursor)
 	// Glyph styles the leading status letter.
 	Glyph = lipgloss.NewStyle().Bold(true)
 	// Clean styles the "nothing to commit" message.
