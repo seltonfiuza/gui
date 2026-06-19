@@ -78,6 +78,8 @@ var (
 	Hint lipgloss.Style
 	// Toast styles a transient error/status message.
 	Toast lipgloss.Style
+	// Version styles the build-version badge in the footer's bottom-left.
+	Version lipgloss.Style
 )
 
 // Overlays.
@@ -146,6 +148,7 @@ func Apply(p Palette) {
 
 	Hint = lipgloss.NewStyle().Foreground(col(p.Footer))
 	Toast = lipgloss.NewStyle().Foreground(col(p.Error)).Bold(true)
+	Version = lipgloss.NewStyle().Foreground(col(p.Branch)).Bold(true)
 
 	Overlay = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

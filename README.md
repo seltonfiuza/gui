@@ -27,20 +27,37 @@ to the `git` CLI for every operation (no Git protocol reimplementation) and does
 
 ## Install / run
 
-```sh
-go build -o gui .
-./gui          # run from anywhere inside a git repository
-```
-
-Or directly:
+**Download a release** — prebuilt binaries for Linux / macOS / Windows
+(amd64 + arm64) are on the [Releases page](../../releases). Grab the archive for
+your platform, extract, and put `gui` on your `PATH`. For example on macOS arm64:
 
 ```sh
-go run .
+VER=0.1.0   # see the Releases page for the latest
+curl -sSL -o gui.tar.gz \
+  https://github.com/selton/gui/releases/download/v${VER}/gui_${VER}_darwin_arm64.tar.gz
+tar -xzf gui.tar.gz
+sudo mv gui /usr/local/bin/   # or any dir on your PATH
+gui --version
 ```
+
+**From source:**
+
+```sh
+go install github.com/selton/gui@latest   # puts `gui` in $(go env GOPATH)/bin
+# or, in a clone:
+go build -o gui . && ./gui
+```
+
+Or run without installing: `go run .`
 
 On launch it detects the repository root (`git rev-parse --show-toplevel`) and
 opens straight into the diff view for the current working tree — no subcommand
 needed. If you are not inside a git repository it prints a clear message and exits.
+`gui --version` prints the build version.
+
+Releases are cut automatically by [GoReleaser](https://goreleaser.com): pushing a
+`vX.Y.Z` tag builds the cross-platform archives, checksums, and changelog and
+publishes the GitHub Release (see [`.github/workflows/release.yml`](.github/workflows/release.yml)).
 
 ## Neovim integration (`:Gui`)
 

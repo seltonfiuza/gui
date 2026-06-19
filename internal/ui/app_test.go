@@ -14,7 +14,7 @@ import (
 )
 
 func newTestApp() *App {
-	a := New(&git.Service{}).(*App)
+	a := New(&git.Service{}, "test").(*App)
 	// Give it a size and a stub status so the diff view has rows.
 	a.width, a.height = 80, 24
 	a.applyLayout()
@@ -779,5 +779,15 @@ func TestHideTreeTogglesPane(t *testing.T) {
 	press(a, "E")
 	if a.diff.ListHidden() {
 		t.Fatalf("E should show the tree again")
+	}
+}
+
+// TestFooterShowsVersion asserts the build version is rendered in the footer.
+func TestFooterShowsVersion(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	a := newTestApp()
+	a.version = "v1.2.3"
+	if !strings.Contains(a.renderFooter(), "v1.2.3") {
+		t.Fatalf("footer should show the version, got: %q", a.renderFooter())
 	}
 }
