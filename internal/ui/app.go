@@ -22,6 +22,7 @@ import (
 	"github.com/selton/gui/internal/ui/diffview"
 	"github.com/selton/gui/internal/ui/help"
 	"github.com/selton/gui/internal/ui/styles"
+	"github.com/selton/gui/internal/ui/themepicker"
 )
 
 // view enumerates the active top-level view.
@@ -31,6 +32,7 @@ const (
 	viewDiff view = iota
 	viewBranch
 	viewHelp
+	viewTheme
 )
 
 // ---- messages returned by git commands ----
@@ -91,6 +93,7 @@ const (
 type App struct {
 	repo       *git.Service
 	dispatcher *config.Dispatcher
+	cfg        config.Config
 
 	status *git.Status
 	remote *git.Remote
@@ -99,6 +102,10 @@ type App struct {
 	diff   diffview.Model
 	branch branchpanel.Model
 	help   help.Model
+	theme  themepicker.Model
+
+	// dragging is true while the user holds the mouse on the divider to resize.
+	dragging bool
 
 	// pending confirmation for a destructive file op (discard).
 	confirm *confirmState
@@ -154,23 +161,29 @@ type confirmState struct {
 }
 
 // New constructs the root model. It satisfies the contract expected by main.go:
-// New(repo *git.Service) returns a tea.Model.
+// New(repo *git.Service) returns a tea.Model. It loads persisted config and
+// applies the saved theme so the UI launches in the user's preferred colors.
 func New(repo *git.Service) tea.Model {
+	cfg, _ := config.Load()
+	styles.SetTheme(cfg.Theme)
 	return &App{
-		repo:       repo,
-		dispatcher: config.NewDispatcher(config.DefaultKeymap()),
-		active:     viewDiff,
-		diff:       diffview.New(),
+		repo:        repo,
+		cfg:         cfg,
+		dispatcher:  config.NewDispatcher(config.DefaultKeymap()),
+		active:      viewDiff,
+		diff:        diffview.New(),
 		branch:      branchpanel.New(),
 		help:        help.New(),
+		theme:       themepicker.New(),
 		listWidth:   defaultListWidth,
 		autoRefresh: true,
 	}
 }
 
-// Init fires the initial status + remote loads and starts the auto-refresh tick.
+// Init fires the initial status + remote loads, starts the auto-refresh tick,
+// and enables mouse cell-motion so clicks/scroll/drag are delivered to Update.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), scheduleTick())
+	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), scheduleTick(), tea.EnableMouseCellMotion)
 }
 
 // ---- commands ----
@@ -330,6 +343,9 @@ func (a *App) overlayActive() bool {
 	if a.active == viewBranch {
 		return true
 	}
+	if a.active == viewTheme {
+		return true
+	}
 	return false
 }
 
@@ -463,10 +479,95 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Quit
 
+	case tea.MouseMsg:
+		return a.handleMouse(msg)
+
 	case tea.KeyMsg:
 		return a.handleKey(msg)
 	}
 	return a, nil
+}
+
+// currentLayout snapshots the geometry the mouse hit-test needs.
+func (a *App) currentLayout() layout {
+	return layout{
+		headerHeight: 1,
+		bodyHeight:   a.bodyHeight(),
+		width:        a.width,
+		listWidth:    a.listWidth,
+		diffYOffset:  a.diff.ViewportYOffset(),
+	}
+}
+
+// handleMouse implements click-to-select, click-to-cursor, scroll, and
+// divider-drag. Overlays swallow mouse events (except releasing a drag) so the
+// keyboard flow inside them is never disturbed.
+func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// Always honor a drag release so a divider drag can't get stuck.
+	if msg.Action == tea.MouseActionRelease {
+		a.dragging = false
+		return a, nil
+	}
+	// While an overlay is open, ignore mouse input entirely.
+	if a.active != viewDiff || a.confirm != nil {
+		return a, nil
+	}
+
+	h := hitTest(a.currentLayout(), msg.X, msg.Y)
+
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if h.region == hitDiff {
+			a.diff.ScrollDiff(-3)
+		} else {
+			a.diff.CursorUp()
+			return a, a.refreshDiffCmd()
+		}
+		return a, nil
+	case tea.MouseButtonWheelDown:
+		if h.region == hitDiff {
+			a.diff.ScrollDiff(3)
+		} else {
+			a.diff.CursorDown()
+			return a, a.refreshDiffCmd()
+		}
+		return a, nil
+	}
+
+	// Drag in progress: resize the split to the pointer column.
+	if a.dragging && msg.Action == tea.MouseActionMotion {
+		a.resizeListTo(msg.X)
+		return a, nil
+	}
+
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return a, nil
+	}
+
+	switch h.region {
+	case hitDivider:
+		a.dragging = true
+		return a, nil
+	case hitList:
+		if row, ok := a.diff.ListLineToRow(h.line); ok {
+			a.diff.SelectRow(row)
+			a.diff.FocusList()
+			return a, a.refreshDiffCmd()
+		}
+		return a, nil
+	case hitDiff:
+		a.diff.FocusDiff()
+		a.diff.MoveCursorToRendered(h.line)
+		return a, a.refreshDiffCmd()
+	}
+	return a, nil
+}
+
+// resizeListTo sets the list width so the divider follows the pointer column,
+// clamped to sane minimums, and re-lays out.
+func (a *App) resizeListTo(x int) {
+	a.listWidth = diffview.ClampListWidth(a.width, x)
+	a.applyLayout()
 }
 
 func (a *App) handleMutationDone(msg mutationDoneMsg) (tea.Model, tea.Cmd) {
@@ -524,10 +625,29 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case viewBranch:
 		return a.handleBranchKey(msg)
+	case viewTheme:
+		return a.handleThemeKey(msg)
 	}
 
 	// viewDiff: route through the dispatcher.
 	return a.handleDiffKey(msg)
+}
+
+// handleThemeKey routes a key to the theme picker. Selection moves apply the
+// theme live; enter persists, esc reverts to the theme active on open.
+func (a *App) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	res, cmd := a.theme.Update(msg)
+	switch res.Kind {
+	case themepicker.ResultConfirm:
+		a.cfg.Theme = res.Theme
+		if err := a.cfg.Save(); err != nil {
+			a.toast = "save theme: " + err.Error()
+		}
+		a.active = viewDiff
+	case themepicker.ResultCancel:
+		a.active = viewDiff
+	}
+	return a, cmd
 }
 
 // normalizeKey maps Bubble Tea's key strings onto the names the config keymap
@@ -553,6 +673,18 @@ func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.active = viewBranch
 		a.branch.Reset()
 		return a, a.loadBranchesCmd()
+	case config.ActThemePicker:
+		a.active = viewTheme
+		a.theme.Open()
+		return a, nil
+	case config.ActToggleRawDiff:
+		a.diff.ToggleRawDiff()
+		if a.diff.RawMode() {
+			a.toast = "raw diff: on"
+		} else {
+			a.toast = "raw diff: off"
+		}
+		return a, nil
 	case config.ActRefresh:
 		a.toast = ""
 		return a, a.loadStatusCmd()
@@ -799,6 +931,8 @@ func (a *App) View() string {
 		body = a.help.View(a.width, a.bodyHeight())
 	case viewBranch:
 		body = a.branch.View(a.width, a.bodyHeight())
+	case viewTheme:
+		body = a.theme.View(a.width, a.bodyHeight())
 	default:
 		body = a.diff.View()
 	}
@@ -882,7 +1016,7 @@ func (a *App) renderFooter() string {
 	if !a.autoRefresh {
 		auto = "off"
 	}
-	hint := "j/k move · enter focus diff · u hunk · U file · ctrl+r recover · } { hunk · < > resize · s stage · r refresh · ctrl+t auto:" + auto + " · space b branches · ? help · q quit"
+	hint := "j/k move · enter focus diff · u hunk · U file · ctrl+r recover · } { hunk · < > resize · s stage · r refresh · ctrl+t auto:" + auto + " · space b branches · space t theme · ? help · q quit"
 	if a.confirm != nil {
 		return styles.Confirm.Render(a.confirm.prompt)
 	}

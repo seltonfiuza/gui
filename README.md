@@ -63,7 +63,9 @@ Leader key defaults to **`Space`**.
 | `>` / `<`          | Grow / shrink the diff pane (resize the list ↔ diff split) |
 | `r`                | Refresh Git status (force an immediate reload)           |
 | `Ctrl+T`           | Toggle background auto-refresh on/off                    |
+| `Ctrl+G`           | Toggle the **raw** (unfiltered) diff vs. the cleaned view |
 | `<leader> b`       | Open the branch panel                                    |
+| `<leader> t`       | Open the **theme picker** (live preview)                 |
 | `?`                | Toggle the help / keymap overlay                         |
 | `q`                | Quit (warns if a git operation is in progress)           |
 | `Ctrl+C`           | Quit immediately                                         |
@@ -104,6 +106,55 @@ Auto-refresh is **on by default**. Press **`Ctrl+T`** to toggle it off (useful o
 very large repos) and on again; the footer shows `auto:on` / `auto:off`. Manual
 `r` always forces an immediate reload regardless of the toggle.
 
+### Clean diff view
+
+The diff pane renders a **focused, cleaned diff** rather than raw `git diff`
+plumbing. By default it suppresses `diff --git …`, `index <sha>..<sha> <mode>`,
+`new file mode` / `deleted file mode`, `similarity` / `rename` lines, and the
+redundant `--- a/…` / `+++ b/…` file header. Hunk headers are shown as a compact
+label (`@@ lines X–Y  <context>`), added/removed lines are tinted with a clear
+`+` / `-` marker column, and context lines are dimmed so changes pop. Untracked
+files (rendered via `git diff --no-index`) get the same treatment — no
+`/dev/null` noise leaks through.
+
+The cleanup is a **render-time transform only**: hunk operations (`u` discard,
+`}` / `{` navigation) still run against the raw diff, with an internal line-index
+map keeping the cursor, hunk jumps, and discards byte-exact. Press **`Ctrl+G`**
+to toggle the full raw diff for debugging.
+
+### Themes (`<leader> t`)
+
+A curated set of named themes, each a fully-populated color **palette** that is
+the single source of truth for every style the UI draws (header, group headers,
+status glyphs, selection, diff add/remove/context/hunk, overlays, footer, toasts):
+
+- **Tokyo Night** (default), **Catppuccin**, **Gruvbox**, **Nord**, **Solarized**,
+  and a high-contrast **mono** fallback for 16-color / monochrome terminals.
+
+Press **`<leader> t`** to open the picker. Moving the selection (`j` / `k`)
+re-renders the **whole UI in that theme immediately** (live preview); `Enter`
+confirms and persists the choice, `Esc` reverts to the theme that was active when
+the picker opened. The selected theme is saved to the config file (`theme` key)
+and restored on the next launch. Truecolor values are downsampled automatically to
+the terminal's 256/16-color profile.
+
+### Mouse
+
+Mouse support is enabled by default:
+
+- **Click a file row** to select it and load its diff.
+- **Click in the diff pane** to focus it and move the line cursor to that line
+  (the scroll offset is accounted for).
+- **Scroll wheel** scrolls whichever pane the pointer is over (list or diff).
+- **Drag the divider** between the list and diff to resize the split.
+
+Clicks inside overlays (branch / help / theme picker / confirm) are ignored so
+the keyboard flow is never disturbed, and keyboard-only usage is unchanged.
+
+Trade-off: enabling mouse cell-motion means the terminal's own click-drag **text
+selection** is captured by the app. Use your terminal's modifier (often `Shift`)
+to select/copy text, or rely on the keyboard for everything.
+
 ### Branch panel (`<leader> b`)
 
 A modal overlay listing **Local** branches (current marked `*`) and
@@ -133,7 +184,8 @@ internal/
     diffview/           # header + file list + diff pane (FR-1, FR-2)
     branchpanel/        # branch overlay (FR-3)
     help/               # `?` keymap overlay (FR-4)
-    styles/             # shared lipgloss styles
+    themepicker/        # theme switcher overlay (live preview)
+    styles/             # palette + theme registry; lipgloss styles derived from the active palette
 docs/specs/             # spec-driven development: architecture, git, keymap, ui
 ```
 

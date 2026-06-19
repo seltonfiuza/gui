@@ -96,19 +96,23 @@ func TestLineCursorClampsAtBounds(t *testing.T) {
 	m.SetSize(80, 20, 30)
 	m.SetDiff("b.go", twoHunkDiff)
 	m.FocusDiff()
-	// Walk up to the top.
+	// Walk up to the top. The cleaned view suppresses the leading plumbing
+	// (diff/index/---/+++), so the top stops on the first *rendered* row's raw
+	// line — the first @@ header — not raw line 0.
 	for i := 0; i < 100; i++ {
 		m.CursorUp()
 	}
-	if m.LineCursor() != 0 {
-		t.Fatalf("cursor should clamp at 0, got %d", m.LineCursor())
+	topRaw := m.rawForRendered(0)
+	if m.LineCursor() != topRaw {
+		t.Fatalf("cursor should clamp at first rendered row (raw %d), got %d", topRaw, m.LineCursor())
 	}
-	// Walk down past the end.
+	// Walk down past the end: stops on the last rendered row's raw line.
 	for i := 0; i < 1000; i++ {
 		m.CursorDown()
 	}
-	if m.LineCursor() != len(m.diffLines)-1 {
-		t.Fatalf("cursor should clamp at last line %d, got %d", len(m.diffLines)-1, m.LineCursor())
+	bottomRaw := m.rawForRendered(m.renderedRows() - 1)
+	if m.LineCursor() != bottomRaw {
+		t.Fatalf("cursor should clamp at last rendered row (raw %d), got %d", bottomRaw, m.LineCursor())
 	}
 }
 

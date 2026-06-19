@@ -5,9 +5,12 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/selton/gui/internal/git"
 	"github.com/selton/gui/internal/ui/diffview"
+	"github.com/selton/gui/internal/ui/styles"
 )
 
 func newTestApp() *App {
@@ -48,6 +51,8 @@ func pressCtrl(a *App, name string) {
 		kt = tea.KeyCtrlR
 	case "ctrl+t":
 		kt = tea.KeyCtrlT
+	case "ctrl+g":
+		kt = tea.KeyCtrlG
 	default:
 		a.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)})
 		return
@@ -324,7 +329,9 @@ func TestStatusFingerprintDetectsChange(t *testing.T) {
 		mut(func(s *git.Status) { s.Ahead = 2 }),
 		mut(func(s *git.Status) { s.Behind = 1 }),
 		mut(func(s *git.Status) { s.Upstream = "" }),
-		mut(func(s *git.Status) { s.Unstaged = append(s.Unstaged, git.ChangedFile{Path: "c.go", Worktree: git.Untracked}) }),
+		mut(func(s *git.Status) {
+			s.Unstaged = append(s.Unstaged, git.ChangedFile{Path: "c.go", Worktree: git.Untracked})
+		}),
 		mut(func(s *git.Status) { s.Staged[0].Staged = git.Deleted }),
 	}
 	for i, d := range diffs {
@@ -439,5 +446,155 @@ func TestToggleAutoRefresh(t *testing.T) {
 	pressCtrl(a, "ctrl+t")
 	if !a.autoRefresh {
 		t.Fatalf("ctrl+t should turn auto-refresh back on")
+	}
+}
+
+// TestRendersAcrossAllThemes asserts every theme renders the full UI (diff +
+// focused cursor + overlays) without panic, at a few terminal sizes.
+func TestRendersAcrossAllThemes(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer styles.SetTheme(styles.DefaultTheme)
+	sizes := [][2]int{{40, 12}, {80, 24}, {120, 40}}
+	for _, name := range styles.ThemeNames() {
+		styles.SetTheme(name)
+		for _, s := range sizes {
+			a := newTestApp()
+			a.width, a.height = s[0], s[1]
+			a.applyLayout()
+			a.diff.SetDiff("b.go", sampleDiff)
+			a.diff.FocusDiff()
+			if a.View() == "" {
+				t.Fatalf("theme %q: empty View at %dx%d", name, s[0], s[1])
+			}
+			// Theme picker overlay too.
+			a.active = viewTheme
+			a.theme.Open()
+			if a.View() == "" {
+				t.Fatalf("theme %q: empty picker View at %dx%d", name, s[0], s[1])
+			}
+		}
+	}
+}
+
+// TestThemePickerLivePreviewAndRevert asserts moving the selection applies the
+// theme live, esc reverts to the theme active on open, and enter persists it.
+func TestThemePickerLivePreviewAndRevert(t *testing.T) {
+	defer styles.SetTheme(styles.DefaultTheme)
+	a := newTestApp()
+	// Set a known non-last theme AFTER construction (New applies persisted config)
+	// so Open() records it and `j` has a different theme to preview.
+	styles.SetTheme("tokyonight")
+
+	// Open the picker via leader chord (space then t).
+	press(a, " ")
+	press(a, "t")
+	if a.active != viewTheme {
+		t.Fatalf("space+t should open the theme picker, active=%v", a.active)
+	}
+	opened := styles.ActiveTheme()
+
+	// Move down: live preview must change the active theme immediately.
+	press(a, "j")
+	if styles.ActiveTheme() == opened {
+		t.Fatalf("moving selection should live-preview a different theme")
+	}
+
+	// Esc reverts to the theme active when opened, and closes the picker.
+	pressNamed(a, tea.KeyEsc)
+	if a.active != viewDiff {
+		t.Fatalf("esc should close the picker")
+	}
+	if styles.ActiveTheme() != opened {
+		t.Fatalf("esc should revert theme to %q, got %q", opened, styles.ActiveTheme())
+	}
+}
+
+// TestThemePickerConfirmUpdatesConfig asserts enter records the chosen theme in
+// the in-memory config (Save is best-effort and not asserted here).
+func TestThemePickerConfirmUpdatesConfig(t *testing.T) {
+	// Redirect config persistence to a temp dir so confirming doesn't touch the
+	// developer's real ~/.../gui/config.json (os.UserConfigDir honors these).
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	defer styles.SetTheme(styles.DefaultTheme)
+	a := newTestApp()
+	styles.SetTheme("tokyonight")
+	press(a, " ")
+	press(a, "t")
+	press(a, "j") // preview the next theme
+	chosen := styles.ActiveTheme()
+	pressNamed(a, tea.KeyEnter)
+	if a.active != viewDiff {
+		t.Fatalf("enter should close the picker")
+	}
+	if a.cfg.Theme != chosen {
+		t.Fatalf("enter should record theme %q in config, got %q", chosen, a.cfg.Theme)
+	}
+}
+
+// TestMouseClickSelectsFileRow asserts a left click on a file row selects that
+// file (mouse hit-test → SelectRow), respecting the body/header offset.
+func TestMouseClickSelectsFileRow(t *testing.T) {
+	a := newTestApp()
+	// Layout: header at y=0, body starts y=1. List body:
+	//   line0: "Staged (1)"   (header)
+	//   line1: a.go            (row 0)
+	//   line2: (blank)
+	//   line3: "Unstaged (1)"  (header)
+	//   line4: b.go            (row 1)
+	// Click b.go: body line 4 → screen y=5, x in the list pane.
+	_, _ = a.handleMouse(tea.MouseMsg{
+		X: 2, Y: 5,
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	if a.diff.SelectedPath() != "b.go" {
+		t.Fatalf("clicking b.go's row should select it, got %q", a.diff.SelectedPath())
+	}
+}
+
+// TestMouseDividerDragResizes asserts pressing on the divider then dragging
+// changes the list width (clamped via ClampListWidth).
+func TestMouseDividerDragResizes(t *testing.T) {
+	a := newTestApp()
+	before := a.listWidth
+	// Press on the divider column.
+	_, _ = a.handleMouse(tea.MouseMsg{
+		X: a.listWidth, Y: 3,
+		Action: tea.MouseActionPress, Button: tea.MouseButtonLeft,
+	})
+	if !a.dragging {
+		t.Fatalf("pressing the divider should start a drag")
+	}
+	// Drag left to a smaller column.
+	_, _ = a.handleMouse(tea.MouseMsg{
+		X: before - 8, Y: 3,
+		Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft,
+	})
+	if a.listWidth >= before {
+		t.Fatalf("dragging the divider left should shrink the list (%d -> %d)", before, a.listWidth)
+	}
+	// Release ends the drag.
+	_, _ = a.handleMouse(tea.MouseMsg{Action: tea.MouseActionRelease})
+	if a.dragging {
+		t.Fatalf("release should end the drag")
+	}
+}
+
+// TestToggleRawDiff asserts ctrl+g flips the diff view between cleaned and raw.
+func TestToggleRawDiff(t *testing.T) {
+	a := newTestApp()
+	a.diff.SetDiff("b.go", sampleDiff)
+	if a.diff.RawMode() {
+		t.Fatalf("raw mode should default off")
+	}
+	pressCtrl(a, "ctrl+g")
+	if !a.diff.RawMode() {
+		t.Fatalf("ctrl+g should turn raw mode on")
+	}
+	pressCtrl(a, "ctrl+g")
+	if a.diff.RawMode() {
+		t.Fatalf("ctrl+g should turn raw mode back off")
 	}
 }

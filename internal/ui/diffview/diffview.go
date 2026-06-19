@@ -14,6 +14,7 @@
 package diffview
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -61,11 +62,13 @@ type Model struct {
 	vpReady     bool
 	diffPath    string   // path the viewport content currently belongs to
 	diffRaw     string   // raw (uncolorized) diff text for the loaded path
-	diffLines   []string // strings.Split(diffRaw, "\n") — the cursor index space
-	styledLines []string // per-line colorized cache (parallel to diffLines)
+	diffLines   []string // strings.Split(diffRaw, "\n") — the RAW cursor index space
+	cleaned     cleanedDiff
+	styledLines []string // per-rendered-row colorized cache (parallel to cleaned.lines)
 	hunks       []git.Hunk
-	lineCursor  int // 0-based index into diffLines
-	prevCursor  int // last cursor position whose highlight is reflected in styledLines
+	lineCursor  int  // 0-based index into diffLines (RAW space; matches git.ParseHunks)
+	prevCursor  int  // last RAW cursor whose highlight is reflected in styledLines
+	rawMode     bool // when true, show the unfiltered raw diff (toggle)
 
 	listWidth   int
 	totalWidth  int
@@ -237,19 +240,84 @@ func (m *Model) CursorUp() {
 	}
 }
 
+// renderedRows is the number of rows shown in the cleaned view.
+func (m *Model) renderedRows() int { return len(m.cleaned.lines) }
+
+// renderedCursor returns the rendered row the raw line cursor maps to (or 0).
+func (m *Model) renderedCursor() int {
+	if m.lineCursor >= 0 && m.lineCursor < len(m.cleaned.rawToRendered) {
+		if r := m.cleaned.rawToRendered[m.lineCursor]; r >= 0 {
+			return r
+		}
+	}
+	return 0
+}
+
+// rawForRendered maps a rendered row back to its raw diff line index.
+func (m *Model) rawForRendered(row int) int {
+	if row >= 0 && row < len(m.cleaned.renderedToRaw) {
+		return m.cleaned.renderedToRaw[row]
+	}
+	return 0
+}
+
+// lineCursorDown/Up step the cursor through *rendered* rows (so visually skipped
+// plumbing lines are never landed on), then translate the new rendered row back
+// into raw-line space — keeping LineCursor() consistent with git.ParseHunks.
 func (m *Model) lineCursorDown() {
-	if m.lineCursor < len(m.diffLines)-1 {
-		m.lineCursor++
+	r := m.renderedCursor()
+	if r < m.renderedRows()-1 {
+		m.lineCursor = m.rawForRendered(r + 1)
 		m.afterCursorMove()
 	}
 }
 
 func (m *Model) lineCursorUp() {
-	if m.lineCursor > 0 {
-		m.lineCursor--
+	r := m.renderedCursor()
+	if r > 0 {
+		m.lineCursor = m.rawForRendered(r - 1)
 		m.afterCursorMove()
 	}
 }
+
+// MoveCursorToRendered moves the line cursor to a rendered row (used by the
+// mouse: click in the diff pane → cursor on that row). Clamped to range.
+func (m *Model) MoveCursorToRendered(row int) {
+	if m.renderedRows() == 0 {
+		return
+	}
+	if row < 0 {
+		row = 0
+	}
+	if row >= m.renderedRows() {
+		row = m.renderedRows() - 1
+	}
+	m.lineCursor = m.rawForRendered(row)
+	m.afterCursorMove()
+}
+
+// ViewportYOffset returns the diff viewport's current scroll offset (rendered
+// rows scrolled past the top). Used by the mouse hit-test.
+func (m *Model) ViewportYOffset() int {
+	if !m.vpReady {
+		return 0
+	}
+	return m.vp.YOffset
+}
+
+// ToggleRawDiff flips between the cleaned view and the unfiltered raw diff,
+// re-rendering and keeping the cursor on the same raw line.
+func (m *Model) ToggleRawDiff() {
+	m.rawMode = !m.rawMode
+	m.renderStyledLines()
+	if m.vpReady {
+		m.vp.SetContent(strings.Join(m.styledLines, "\n"))
+	}
+	m.ensureCursorVisible()
+}
+
+// RawMode reports whether the raw (unfiltered) diff is being shown.
+func (m *Model) RawMode() bool { return m.rawMode }
 
 // LineCursor returns the current 0-based diff line cursor.
 func (m *Model) LineCursor() int { return m.lineCursor }
@@ -295,6 +363,27 @@ func (m *Model) afterCursorMove() {
 	m.ensureCursorVisible()
 }
 
+// SelectRow sets the file selection to row index i (clamped). Returns true if a
+// valid row was selected. Used by the mouse: click a file row → select it.
+func (m *Model) SelectRow(i int) bool {
+	if i < 0 || i >= len(m.rows) {
+		return false
+	}
+	m.cursor = i
+	return true
+}
+
+// RowCount returns the number of file rows.
+func (m *Model) RowCount() int { return len(m.rows) }
+
+// ScrollDiff scrolls the diff viewport by delta rendered rows (positive = down).
+func (m *Model) ScrollDiff(delta int) {
+	if !m.vpReady {
+		return
+	}
+	m.vp.SetYOffset(m.vp.YOffset + delta)
+}
+
 // Selected returns the currently selected row and whether one exists.
 func (m *Model) Selected() (Row, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.rows) {
@@ -337,6 +426,12 @@ func (m *Model) SetDiff(path, raw string) {
 	m.ensureCursorVisible()
 }
 
+// rebuildCleaned recomputes the cleaned render + index maps for the current raw
+// diff and rawMode. Must be called before (re)styling rendered rows.
+func (m *Model) rebuildCleaned() {
+	m.cleaned = cleanDiff(m.diffRaw, m.rawMode)
+}
+
 // SetDiffPreserving loads a diff like SetDiff, but when the raw text is
 // identical to what is already loaded for path it is a no-op that keeps the line
 // cursor and viewport scroll exactly where they are. This is the background-tick
@@ -349,44 +444,50 @@ func (m *Model) SetDiffPreserving(path, raw string) {
 	m.SetDiff(path, raw)
 }
 
-// renderStyledLines (re)builds the per-line colorized cache from diffLines and
-// applies the cursor highlight. This is the only full re-colorize; cursor moves
-// use restyleCursorLines to avoid re-styling the whole diff.
+// renderStyledLines (re)builds the cleaned render + the per-rendered-row
+// colorized cache, applying the cursor highlight. This is the only full
+// re-colorize; cursor moves use restyleCursorLines to avoid re-styling the whole
+// diff.
 func (m *Model) renderStyledLines() {
-	m.styledLines = make([]string, len(m.diffLines))
-	for i, ln := range m.diffLines {
-		m.styledLines[i] = m.styleLine(i, ln)
+	m.rebuildCleaned()
+	m.styledLines = make([]string, len(m.cleaned.lines))
+	cur := m.renderedCursor()
+	for i, cl := range m.cleaned.lines {
+		m.styledLines[i] = m.styleRow(i, cl, cur)
 	}
 	m.prevCursor = m.lineCursor
 }
 
-// styleLine colorizes one diff line, applying the cursor highlight when the
-// diff is focused and i is the cursor line.
-func (m *Model) styleLine(i int, ln string) string {
-	base := colorizeLine(ln)
-	if m.focus == FocusDiff && i == m.lineCursor {
+// styleRow colorizes one rendered row, applying the cursor highlight when the
+// diff is focused and row is the rendered cursor row.
+func (m *Model) styleRow(row int, cl cleanLine, cursorRow int) string {
+	if m.focus == FocusDiff && row == cursorRow {
 		width := m.vp.Width
 		if width < 1 {
-			width = lipgloss.Width(ln)
+			width = lipgloss.Width(cl.text)
 		}
-		return styles.DiffCursor.Width(width).Render(ln)
+		return styles.DiffCursor.Width(width).Render(cl.text)
 	}
-	return base
+	return styleClean(cl)
 }
 
 // restyleCursorLines updates the highlight after a cursor move. It re-styles
-// only the lines whose highlight state changed — the new cursor line and the
-// previously-highlighted line — then re-joins the cached styledLines. This
-// keeps cursor movement O(1) in lipgloss work even for very large diffs (no
-// re-parse, no full re-colorize per keypress).
+// only the rendered rows whose highlight state changed — the new cursor row and
+// the previously-highlighted row — then re-joins the cached styledLines. This
+// keeps cursor movement O(1) in lipgloss work even for very large diffs.
 func (m *Model) restyleCursorLines() {
-	if len(m.styledLines) != len(m.diffLines) {
+	if len(m.styledLines) != len(m.cleaned.lines) {
 		// Cache out of sync (e.g. width changed); rebuild fully.
 		m.renderStyledLines()
 	} else {
-		for _, i := range []int{m.prevCursor, m.lineCursor} {
-			if i >= 0 && i < len(m.diffLines) {
-				m.styledLines[i] = m.styleLine(i, m.diffLines[i])
+		prevRow := -1
+		if m.prevCursor >= 0 && m.prevCursor < len(m.cleaned.rawToRendered) {
+			prevRow = m.cleaned.rawToRendered[m.prevCursor]
+		}
+		curRow := m.renderedCursor()
+		for _, row := range []int{prevRow, curRow} {
+			if row >= 0 && row < len(m.cleaned.lines) {
+				m.styledLines[row] = m.styleRow(row, m.cleaned.lines[row], curRow)
 			}
 		}
 	}
@@ -410,18 +511,20 @@ func (m *Model) refreshViewport() {
 	m.ensureCursorVisible()
 }
 
-// ensureCursorVisible scrolls the viewport so the line cursor stays in view.
+// ensureCursorVisible scrolls the viewport so the (rendered) cursor row stays in
+// view.
 func (m *Model) ensureCursorVisible() {
 	if !m.vpReady || m.focus != FocusDiff {
 		return
 	}
+	row := m.renderedCursor()
 	top := m.vp.YOffset
 	bottom := top + m.vp.Height - 1
 	switch {
-	case m.lineCursor < top:
-		m.vp.SetYOffset(m.lineCursor)
-	case m.lineCursor > bottom:
-		m.vp.SetYOffset(m.lineCursor - m.vp.Height + 1)
+	case row < top:
+		m.vp.SetYOffset(row)
+	case row > bottom:
+		m.vp.SetYOffset(row - m.vp.Height + 1)
 	}
 }
 
@@ -435,26 +538,6 @@ func (m *Model) ForwardViewport(msg tea.Msg) tea.Cmd {
 // IsClean reports whether the working tree has no changes.
 func (m *Model) IsClean() bool {
 	return len(m.rows) == 0
-}
-
-// colorizeLine applies diff line styling to a single line.
-func colorizeLine(ln string) string {
-	switch {
-	case strings.HasPrefix(ln, "@@"):
-		return styles.Hunk.Render(ln)
-	case strings.HasPrefix(ln, "+++") || strings.HasPrefix(ln, "---"):
-		return styles.DiffMeta.Render(ln)
-	case strings.HasPrefix(ln, "diff ") || strings.HasPrefix(ln, "index ") ||
-		strings.HasPrefix(ln, "new file") || strings.HasPrefix(ln, "deleted file") ||
-		strings.HasPrefix(ln, "rename ") || strings.HasPrefix(ln, "similarity "):
-		return styles.DiffMeta.Render(ln)
-	case strings.HasPrefix(ln, "+"):
-		return styles.Added.Render(ln)
-	case strings.HasPrefix(ln, "-"):
-		return styles.Removed.Render(ln)
-	default:
-		return ln
-	}
 }
 
 // glyph maps a ChangedFile to its single-letter status glyph.
@@ -505,24 +588,42 @@ func (m *Model) View() string {
 	diff := m.renderDiff()
 
 	list = lipgloss.NewStyle().Width(m.listWidth).Height(m.totalHeight).Render(list)
-	gap := lipgloss.NewStyle().Foreground(lipgloss.Color("#3B4261")).Render(verticalBar(m.totalHeight))
+	gap := styles.Divider.Render(verticalBar(m.totalHeight))
 	return lipgloss.JoinHorizontal(lipgloss.Top, list, gap, diff)
+}
+
+// groupCount returns how many rows belong to group g.
+func (m *Model) groupCount(g Group) int {
+	n := 0
+	for _, r := range m.rows {
+		if r.Group == g {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *Model) renderList() string {
 	var b strings.Builder
 	lastGroup := Group(-1)
 	for i, r := range m.rows {
+		// Empty groups never produce a row, so emitting a header only when the
+		// group changes (i.e. a row exists) inherently omits empty groups.
 		if r.Group != lastGroup {
 			if lastGroup != -1 {
 				b.WriteByte('\n')
 			}
-			b.WriteString(styles.GroupHeader.Render(groupName(r.Group)))
+			b.WriteString(renderGroupHeader(r.Group, m.groupCount(r.Group)))
 			b.WriteByte('\n')
 			lastGroup = r.Group
 		}
-		g := styles.Glyph.Render(glyph(r.Group, r.File))
-		line := g + " " + label(r.File)
+		gl := glyph(r.Group, r.File)
+		g := styles.GlyphStyle(gl).Render(gl)
+		text := label(r.File)
+		if r.Group == GroupUntracked {
+			text = styles.UntrackedRow.Render(text)
+		}
+		line := g + " " + text
 		if i == m.cursor {
 			style := styles.SelectedRow.Width(m.listWidth)
 			if m.focus == FocusDiff {
@@ -530,14 +631,54 @@ func (m *Model) renderList() string {
 				// j/k now move within the diff.
 				style = styles.SelectedRowInactive.Width(m.listWidth)
 			}
-			line = style.Render(line)
-		} else {
-			line = styles.Row.Render(line)
+			// Re-render the plain (uncolorized) row so the selection bg/contrast
+			// stays legible across themes instead of fighting glyph/tint colors.
+			plain := gl + " " + label(r.File)
+			line = style.Render(plain)
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderGroupHeader renders a distinct, per-group header with a count badge,
+// e.g. "Unstaged (3)".
+func renderGroupHeader(g Group, count int) string {
+	var style = styles.GroupUnstaged
+	switch g {
+	case GroupStaged:
+		style = styles.GroupStaged
+	case GroupUntracked:
+		style = styles.GroupUntracked
+	}
+	return style.Render(groupName(g)) + " " + styles.GroupBadge.Render(fmt.Sprintf("(%d)", count))
+}
+
+// GroupRowRange returns the [start,end) row indices spanned by each group in the
+// flattened list — used by the mouse hit-test to translate a list y-coordinate
+// (which includes group-header lines) into a row index.
+func (m *Model) ListLineToRow(line int) (int, bool) {
+	// The list renders, per non-empty group: 1 header line then its rows.
+	cur := 0 // current rendered line within the list body
+	lastGroup := Group(-1)
+	for i, r := range m.rows {
+		if r.Group != lastGroup {
+			if lastGroup != -1 {
+				cur++ // blank separator line between groups
+			}
+			if line == cur {
+				return -1, false // clicked the header line
+			}
+			cur++ // header line
+			lastGroup = r.Group
+		}
+		if line == cur {
+			return i, true
+		}
+		cur++
+	}
+	return -1, false
 }
 
 func (m *Model) renderDiff() string {
