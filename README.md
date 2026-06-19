@@ -29,18 +29,23 @@ needed. If you are not inside a git repository it prints a clear message and exi
 
 ```
 ┌ origin/main · feature ↑2↓1 · owner/repo · /path/to/project   ← header (FR-1)
-│ Staged        A  newfile.go                                   ← file list (FR-2)
-│ Unstaged      M  main.go
-│ Untracked     ?  scratch.txt
-│ ───────────────────────────────────────────────
-│ <unified diff of the selected file, colorized>               ← scrollable diff pane
-└ <toast / hint footer>
+│ Unstaged (3)                  │ <unified diff of the           ← file tree (FR-2)
+│ ▾ internal/ui/                │  selected file, colorized>       beside the
+│ │   M app.go                  │                                  scrollable
+│ ▸ internal/git/ (2)           │                                  diff pane
+│   M README.md                 │                               █  ← scrollbar
+└ j/k move · enter open · h/l fold · . flat · … ← toast / hint footer
 ```
 
 - **Header** shows the current branch, ahead/behind vs. upstream (when configured),
   the `origin` identity (`owner/repo` or host) when a remote exists, and the repo path.
 - **File list** groups changes into **Staged**, **Unstaged**, and **Untracked**, with
   status glyphs `A`/`M`/`D`/`R`/`?`/`C`/`U`. Renames render as `orig → new`.
+  Within each group, files are shown as a **folder tree**: single-child directory
+  chains are **compacted** onto one line (`internal/ui/diffview/`), folders can be
+  **collapsed/expanded** (`h`/`l`/`Enter`, or click), and `.` toggles a **flat**
+  view of full relative paths. Long names wrap to stay readable; the list scrolls
+  to keep the selection visible.
 - **Diff pane** shows the unified diff of the selected file (`+` green, `−` red,
   `@@` cyan) in a scrollable viewport.
 - A clean tree shows a friendly *"nothing to commit, working tree clean"* message.
@@ -53,7 +58,12 @@ Leader key defaults to **`Space`**.
 |--------------------|----------------------------------------------------------|
 | `j` / `↓`          | Move down — file selection (list focus) or **diff line cursor** (diff focus) |
 | `k` / `↑`          | Move up — file selection or diff line cursor             |
-| `Enter`            | Focus the diff pane for the selected file (j/k then move by line) |
+| `Tab`              | Move focus between the **file tree** and the **diff contents** |
+| `Enter`            | On a file: focus the diff pane (j/k then move by line). On a folder: collapse/expand it |
+| `h` / `←`          | Collapse the folder under the cursor, or jump to its parent |
+| `l` / `→`          | Expand the folder under the cursor, or step into it       |
+| `.`                | Toggle **folder tree** ↔ **flat** (full-path) file list   |
+| `Shift+E`          | Hide / show the file-tree pane (diff takes the full width) |
 | `Esc`              | Return focus to the file list / close an overlay         |
 | `}` / `{`          | Jump to the next / previous hunk in the diff             |
 | `s`                | Stage or unstage the selected file                       |

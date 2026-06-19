@@ -153,9 +153,9 @@ func TestSetStatusPreservesSelectionByPath(t *testing.T) {
 		},
 	}
 	m.SetStatus(st)
-	m.cursor = 1 // select b.go
+	m.SelectRow(1) // select b.go (node index 1 in the flat root list)
 	if m.SelectedPath() != "b.go" {
-		t.Fatalf("setup: expected b.go selected")
+		t.Fatalf("setup: expected b.go selected, got %q", m.SelectedPath())
 	}
 	// a.go removed: b.go must stay selected (now at index 0).
 	st2 := &git.Status{
@@ -253,39 +253,69 @@ func TestListClickMapsToRenderedFileWhenScrolled(t *testing.T) {
 	}
 }
 
-// TestLongPathWraps asserts a path longer than the pane wraps onto multiple
-// screen lines (stays readable) and that EVERY one of those lines maps back to
-// the same file row — so clicking any wrapped line selects the right file.
-func TestLongPathWraps(t *testing.T) {
+// TestCompactsSingleChildChains asserts a deep single-child directory chain
+// collapses to one folder node (so a 6-deep path is two lines, not seven).
+func TestCompactsSingleChildChains(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New()
+	m.SetSize(60, 40, 36)
+	m.SetStatus(&git.Status{Unstaged: []git.ChangedFile{
+		{Path: "a/b/c/d/e/f.go", Worktree: git.Modified},
+	}})
+	nodes := m.nodes()
+	if len(nodes) != 2 {
+		t.Fatalf("expected 1 folder + 1 file node, got %d", len(nodes))
+	}
+	if nodes[0].kind != folderNode || nodes[0].label != "a/b/c/d/e" {
+		t.Errorf("compacted folder = %q (kind %d), want a/b/c/d/e", nodes[0].label, nodes[0].kind)
+	}
+	if nodes[1].kind != fileNode || nodes[1].label != "f.go" {
+		t.Errorf("file leaf = %q (kind %d), want f.go", nodes[1].label, nodes[1].kind)
+	}
+	if nodes[1].depth != nodes[0].depth+1 {
+		t.Errorf("file depth %d should be folder depth %d + 1", nodes[1].depth, nodes[0].depth)
+	}
+}
+
+// TestLongBasenameWraps asserts a long file name wraps onto multiple screen
+// lines and that EVERY wrapped line maps back to the same node — so clicking any
+// of them selects the right file.
+func TestLongBasenameWraps(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	m := New()
 	m.SetSize(50, 20, 20) // listWidth=20
-	long := "internal/very/deeply/nested/path/to/a/file/way_too_long.go"
-	m.SetStatus(&git.Status{Unstaged: []git.ChangedFile{
-		{Path: "a.go", Worktree: git.Modified},
-		{Path: long, Worktree: git.Modified},
-		{Path: "z.go", Worktree: git.Modified},
-	}})
+	long := "this_is_a_really_long_basename_that_will_wrap.go"
+	m.SetStatus(&git.Status{Unstaged: []git.ChangedFile{{Path: long, Worktree: git.Modified}}})
+
+	nodes := m.nodes()
+	fileIdx := -1
+	for i, n := range nodes {
+		if n.kind == fileNode {
+			fileIdx = i
+		}
+	}
+	if fileIdx < 0 {
+		t.Fatalf("no file node found")
+	}
 	cells := m.listCells()
 	var lines []int
 	for ci, c := range cells {
-		if c.row == 1 { // the long path is row index 1
+		if c.row == fileIdx {
 			lines = append(lines, ci)
 		}
 	}
 	if len(lines) < 2 {
-		t.Fatalf("long path should wrap to multiple lines, got %d", len(lines))
+		t.Fatalf("long basename should wrap to multiple lines, got %d", len(lines))
 	}
 	for _, ci := range lines {
-		if row, ok := m.ListLineToRow(ci - m.listOffset); !ok || row != 1 {
-			t.Errorf("wrapped line %d: got row=%d ok=%v want 1", ci, row, ok)
+		if row, ok := m.ListLineToRow(ci - m.listOffset); !ok || row != fileIdx {
+			t.Errorf("wrapped line %d: got row=%d ok=%v want %d", ci, row, ok, fileIdx)
 		}
 	}
 }
 
-// TestFolderTreeStructure asserts the list renders nested files as a folder tree:
-// directory nodes are present and non-selectable, file leaves map to their row,
-// and the depth-first order matches the sorted row order.
+// TestFolderTreeStructure asserts nested files render as a folder tree: the right
+// number of folder vs file nodes, and every cell maps consistently to its node.
 func TestFolderTreeStructure(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	m := New()
@@ -296,34 +326,88 @@ func TestFolderTreeStructure(t *testing.T) {
 		{Path: "internal/git/git.go", Worktree: git.Modified},
 		{Path: "README.md", Worktree: git.Modified},
 	}})
-	cells := m.listCells()
-
 	var folders, files int
+	for _, n := range m.nodes() {
+		if n.kind == folderNode {
+			folders++
+		} else {
+			files++
+		}
+	}
+	if files != 4 {
+		t.Errorf("expected 4 file leaves, got %d", files)
+	}
+	// internal/ (branches to git + ui), git/, ui/ -> 3 folder nodes.
+	if folders != 3 {
+		t.Errorf("expected 3 folder nodes, got %d", folders)
+	}
+
+	cells := m.listCells()
 	for ci, c := range cells {
 		row, ok := m.ListLineToRow(ci) // listOffset is 0 here
 		if c.row < 0 {
 			if ok {
-				t.Errorf("cell %d (%q) is non-file but hit-test returned a row", ci, c.text)
-			}
-			if strings.Contains(c.text, "/") && !strings.Contains(c.text, "(") {
-				folders++
+				t.Errorf("cell %d (%q) is chrome but hit-test returned row %d", ci, c.text, row)
 			}
 			continue
 		}
 		if !ok || row != c.row {
 			t.Errorf("cell %d: hit-test row=%d ok=%v want %d", ci, row, ok, c.row)
 		}
-		files++
 	}
-	if files != 4 {
-		t.Errorf("expected 4 file leaves, got %d", files)
+}
+
+// TestCollapseHidesChildrenAndToggles asserts collapsing a folder hides its
+// files and re-expanding restores them.
+func TestCollapseHidesChildrenAndToggles(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New()
+	m.SetSize(60, 40, 36)
+	m.SetStatus(&git.Status{Unstaged: []git.ChangedFile{
+		{Path: "internal/ui/app.go", Worktree: git.Modified},
+		{Path: "internal/ui/app_test.go", Worktree: git.Modified},
+	}})
+	// Compacted to one folder "internal/ui" + 2 files.
+	if got := len(m.nodes()); got != 3 {
+		t.Fatalf("expected 3 nodes before collapse, got %d", got)
 	}
-	// internal/, git/, ui/ -> at least 3 folder nodes.
-	if folders < 3 {
-		t.Errorf("expected >=3 folder nodes, got %d", folders)
+	m.SelectRow(0) // the folder
+	if !m.Activate() {
+		t.Fatalf("Activate on a folder should report a toggle")
 	}
-	// Sorted row order: README.md first (root), then internal/git/git.go, then ui.
-	if m.rows[0].File.Path != "README.md" {
-		t.Errorf("rows should be path-sorted; row0=%s", m.rows[0].File.Path)
+	if got := len(m.nodes()); got != 1 {
+		t.Errorf("collapsed folder should hide its 2 files (1 node), got %d", got)
+	}
+	if _, ok := m.Selected(); ok {
+		t.Errorf("a folder is selected; Selected() should report no file")
+	}
+	m.Activate() // expand again
+	if got := len(m.nodes()); got != 3 {
+		t.Errorf("expanded folder should restore 3 nodes, got %d", got)
+	}
+}
+
+// TestFlatModeShowsFullPaths asserts flat mode emits one file node per file with
+// the full path and no folder nodes.
+func TestFlatModeShowsFullPaths(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	m := New()
+	m.SetSize(60, 40, 36)
+	m.SetStatus(&git.Status{Unstaged: []git.ChangedFile{
+		{Path: "internal/ui/app.go", Worktree: git.Modified},
+		{Path: "internal/git/git.go", Worktree: git.Modified},
+	}})
+	m.ToggleTreeMode() // -> flat
+	nodes := m.nodes()
+	if len(nodes) != 2 {
+		t.Fatalf("flat mode: expected 2 file nodes, got %d", len(nodes))
+	}
+	for _, n := range nodes {
+		if n.kind != fileNode {
+			t.Errorf("flat mode should have no folder nodes, got kind %d", n.kind)
+		}
+		if !strings.Contains(n.label, "/") {
+			t.Errorf("flat node label should be a full path, got %q", n.label)
+		}
 	}
 }

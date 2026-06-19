@@ -56,10 +56,21 @@ type Row struct {
 type Model struct {
 	status *git.Status
 	rows   []Row
+	// cursor indexes the current visible NODE list (files AND folders), not rows.
 	cursor int
-	// hoverRow is the flattened row index currently under the mouse pointer, or
-	// -1 when nothing is hovered. Purely a visual affordance — it never changes
-	// the selection or what an action operates on.
+	// selKey is the key (file path or folder path) of the selected node, used to
+	// re-anchor the cursor after the node list changes (refresh / collapse / mode
+	// toggle) so the selection follows the same item rather than an index.
+	selKey string
+	// treeMode renders changed files as a folder tree (true) or a flat list of
+	// full paths (false). Toggleable at runtime.
+	treeMode bool
+	// collapsed records folders (by full path) the user has folded shut.
+	collapsed map[string]bool
+	// listHidden hides the file-list pane entirely (the diff fills the width).
+	listHidden bool
+	// hoverRow is the visible-node index currently under the mouse pointer, or -1
+	// when nothing is hovered. Purely a visual affordance.
 	hoverRow int
 	// listOffset is the number of list lines scrolled past the top of the file
 	// pane, so a list taller than the pane scrolls to keep the selection visible.
@@ -86,14 +97,14 @@ type Model struct {
 
 // New builds an empty diff panel.
 func New() Model {
-	return Model{hoverRow: -1}
+	return Model{hoverRow: -1, treeMode: true, collapsed: map[string]bool{}}
 }
 
-// SetHoverRow sets the flattened file-row index under the mouse pointer (-1 for
-// none). Returns true when the hover target changed, so the caller can avoid a
-// redundant re-render on every pixel of mouse motion. Hover is cosmetic only.
+// SetHoverRow sets the visible-node index under the mouse pointer (-1 for none).
+// Returns true when the hover target changed, so the caller can avoid a redundant
+// re-render on every pixel of mouse motion. Hover is cosmetic only.
 func (m *Model) SetHoverRow(i int) bool {
-	if i < -1 || i >= len(m.rows) {
+	if i < -1 {
 		i = -1
 	}
 	if i == m.hoverRow {
@@ -109,22 +120,15 @@ func (m *Model) ClearHover() bool { return m.SetHoverRow(-1) }
 // HoverRow returns the flattened row index under the pointer, or -1 for none.
 func (m *Model) HoverRow() int { return m.hoverRow }
 
-// SetStatus replaces the status and rebuilds the flattened row list, reconciling
-// the selection by path: the previously selected file stays selected if it is
-// still present; if it vanished, a sensible neighbor is chosen (the row that now
-// occupies the old index, clamped). This is what keeps a background refresh from
-// yanking the user's selection back to row 0.
+// SetStatus replaces the status and rebuilds the row list, then re-anchors the
+// selection by key (the previously selected file/folder stays selected if still
+// present; otherwise the cursor clamps into range). This keeps a background
+// refresh from yanking the user's selection back to the top.
 func (m *Model) SetStatus(s *git.Status) {
-	prev := m.SelectedPath()
-	prevIdx := m.cursor
 	m.status = s
 	m.rebuild()
-	paths := make([]string, len(m.rows))
-	for i, r := range m.rows {
-		paths[i] = r.File.Path
-	}
-	m.cursor = ReconcileSelection(prev, prevIdx, paths)
-	m.ensureSelectedVisible()
+	m.pruneCollapsed()
+	m.syncCursor()
 }
 
 // ReconcileSelection resolves the new cursor index after the file list changed.
@@ -178,19 +182,302 @@ func (m *Model) rebuild() {
 	add(GroupUntracked, m.status.Untracked)
 }
 
+// ---- visible-node model (folder tree / flat list) ----
+
+type nodeKind int
+
+const (
+	fileNode nodeKind = iota
+	folderNode
+)
+
+// node is one navigable item in the file list: a file leaf or a folder. Folders
+// are selectable so they can be collapsed/expanded. Group headers are NOT nodes
+// (they are non-navigable chrome inserted at render time).
+type node struct {
+	kind      nodeKind
+	depth     int
+	group     Group
+	label     string // folder: compacted dir label (no trailing slash); file: leaf name
+	key       string // folder: full dir path; file: file path — stable selection id
+	fileRow   int    // file: index into m.rows; folder: -1
+	count     int    // folder: number of files beneath it
+	collapsed bool   // folder only
+}
+
+// nodes computes the current visible node list from the rows, the tree/flat mode
+// and the collapsed set. It is the single source of truth that rendering, the
+// mouse hit-test and the scroll math all derive from.
+func (m *Model) nodes() []node {
+	var out []node
+	for i := 0; i < len(m.rows); {
+		g := m.rows[i].Group
+		start := i
+		for i < len(m.rows) && m.rows[i].Group == g {
+			i++
+		}
+		if m.treeMode {
+			t := buildDirTree(m.rows[start:i], start)
+			m.flatten(t, 0, g, &out)
+		} else {
+			for k := start; k < i; k++ {
+				out = append(out, node{
+					kind: fileNode, depth: 0, group: g,
+					label: m.rows[k].File.Path, key: m.rows[k].File.Path,
+					fileRow: k, count: -1,
+				})
+			}
+		}
+	}
+	return out
+}
+
+// dirTree is an intermediate directory tree built from a group's sorted files.
+type dirTree struct {
+	name     string
+	path     string
+	children map[string]*dirTree
+	order    []string // child dir names, in insertion (sorted) order
+	files    []int    // file row indices directly in this dir
+}
+
+func buildDirTree(rows []Row, baseIdx int) *dirTree {
+	root := &dirTree{children: map[string]*dirTree{}}
+	for k, r := range rows {
+		dirs, _ := splitPath(r.File.Path)
+		cur := root
+		acc := ""
+		for _, d := range dirs {
+			if acc == "" {
+				acc = d
+			} else {
+				acc += "/" + d
+			}
+			child, ok := cur.children[d]
+			if !ok {
+				child = &dirTree{name: d, path: acc, children: map[string]*dirTree{}}
+				cur.children[d] = child
+				cur.order = append(cur.order, d)
+			}
+			cur = child
+		}
+		cur.files = append(cur.files, baseIdx+k)
+	}
+	return root
+}
+
+func countFiles(t *dirTree) int {
+	n := len(t.files)
+	for _, name := range t.order {
+		n += countFiles(t.children[name])
+	}
+	return n
+}
+
+// flatten emits nodes for a directory: child folders first (each compacted across
+// single-child chains and recursed into unless collapsed), then this dir's files.
+func (m *Model) flatten(t *dirTree, depth int, g Group, out *[]node) {
+	for _, name := range t.order {
+		child := t.children[name]
+		// Compact single-child chains: while the node holds no files and exactly
+		// one subdirectory, fold that subdirectory into the label.
+		label := name
+		nd := child
+		for len(nd.files) == 0 && len(nd.order) == 1 {
+			only := nd.children[nd.order[0]]
+			label += "/" + only.name
+			nd = only
+		}
+		collapsed := m.collapsed[nd.path]
+		*out = append(*out, node{
+			kind: folderNode, depth: depth, group: g,
+			label: label, key: nd.path, fileRow: -1,
+			count: countFiles(nd), collapsed: collapsed,
+		})
+		if !collapsed {
+			m.flatten(nd, depth+1, g, out)
+		}
+	}
+	for _, fr := range t.files {
+		f := m.rows[fr].File
+		_, base := splitPath(f.Path)
+		leaf := base
+		if f.OrigPath != "" {
+			_, ob := splitPath(f.OrigPath)
+			leaf = ob + " → " + base
+		}
+		*out = append(*out, node{
+			kind: fileNode, depth: depth, group: g,
+			label: leaf, key: f.Path, fileRow: fr, count: -1,
+		})
+	}
+}
+
+// syncCursor re-anchors the cursor to the node whose key matches selKey after the
+// node list changed; if that node is gone it clamps the index. Keeps selKey and
+// the scroll window consistent.
+func (m *Model) syncCursor() {
+	nodes := m.nodes()
+	if len(nodes) == 0 {
+		m.cursor, m.selKey = 0, ""
+		m.listOffset = 0
+		return
+	}
+	if m.selKey != "" {
+		for i, n := range nodes {
+			if n.key == m.selKey {
+				m.cursor = i
+				m.ensureSelectedVisible()
+				return
+			}
+		}
+	}
+	if m.cursor >= len(nodes) {
+		m.cursor = len(nodes) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	m.selKey = nodes[m.cursor].key
+	m.ensureSelectedVisible()
+}
+
+// pruneCollapsed drops collapsed entries for folders that no longer exist, so the
+// set doesn't grow without bound across refreshes.
+func (m *Model) pruneCollapsed() {
+	if len(m.collapsed) == 0 {
+		return
+	}
+	live := map[string]bool{}
+	for _, n := range m.nodes() {
+		if n.kind == folderNode {
+			live[n.key] = true
+		}
+	}
+	for k := range m.collapsed {
+		if !live[k] {
+			delete(m.collapsed, k)
+		}
+	}
+}
+
+// selectedNode returns the node under the cursor, if any.
+func (m *Model) selectedNode() (node, bool) {
+	nodes := m.nodes()
+	if m.cursor < 0 || m.cursor >= len(nodes) {
+		return node{}, false
+	}
+	return nodes[m.cursor], true
+}
+
+// Activate acts on the node under the cursor: a folder toggles collapse and
+// returns true; a file (or empty) returns false so the caller opens the diff.
+func (m *Model) Activate() bool {
+	n, ok := m.selectedNode()
+	if !ok || n.kind != folderNode {
+		return false
+	}
+	m.toggleFolder(n.key)
+	return true
+}
+
+func (m *Model) toggleFolder(key string) {
+	if m.collapsed[key] {
+		delete(m.collapsed, key)
+	} else {
+		m.collapsed[key] = true
+	}
+	m.selKey = key // keep the folder selected across the relayout
+	m.syncCursor()
+}
+
+// Collapse (h): collapse an expanded folder under the cursor; otherwise move the
+// selection to the nearest ancestor folder.
+func (m *Model) Collapse() {
+	nodes := m.nodes()
+	if m.cursor < 0 || m.cursor >= len(nodes) {
+		return
+	}
+	n := nodes[m.cursor]
+	if n.kind == folderNode && !m.collapsed[n.key] {
+		m.toggleFolder(n.key)
+		return
+	}
+	// Move to the nearest ancestor folder above the cursor.
+	for i := m.cursor - 1; i >= 0; i-- {
+		if nodes[i].kind == folderNode && isAncestorPath(nodes[i].key, n.key) {
+			m.cursor = i
+			m.selKey = nodes[i].key
+			m.ensureSelectedVisible()
+			return
+		}
+	}
+}
+
+// Expand (l): expand a collapsed folder under the cursor; if already expanded,
+// step into its first child.
+func (m *Model) Expand() {
+	nodes := m.nodes()
+	if m.cursor < 0 || m.cursor >= len(nodes) {
+		return
+	}
+	n := nodes[m.cursor]
+	if n.kind != folderNode {
+		return
+	}
+	if m.collapsed[n.key] {
+		m.toggleFolder(n.key)
+		return
+	}
+	if m.cursor < len(nodes)-1 {
+		m.cursor++
+		m.selKey = nodes[m.cursor].key
+		m.ensureSelectedVisible()
+	}
+}
+
+// ToggleTreeMode flips between the folder tree and the flat full-path list,
+// keeping the selected file selected.
+func (m *Model) ToggleTreeMode() {
+	m.treeMode = !m.treeMode
+	m.syncCursor()
+}
+
+// TreeMode reports whether the folder tree (vs flat list) is active.
+func (m *Model) TreeMode() bool { return m.treeMode }
+
+// isAncestorPath reports whether dir is an ancestor directory of path.
+func isAncestorPath(dir, path string) bool {
+	return strings.HasPrefix(path, dir+"/")
+}
+
+// SetListHidden hides or shows the file-list pane. When hidden the diff takes the
+// full width.
+func (m *Model) SetListHidden(b bool) { m.listHidden = b }
+
+// ListHidden reports whether the file-list pane is hidden.
+func (m *Model) ListHidden() bool { return m.listHidden }
+
 // SetSize lays out the panel for the available space. listWidth is the desired
-// absolute width of the file list; it is clamped to keep both panes usable.
+// absolute width of the file list; it is clamped to keep both panes usable. When
+// the list is hidden the diff fills the whole width (minus the scrollbar).
 func (m *Model) SetSize(width, height, listWidth int) {
 	m.totalWidth = width
 	m.totalHeight = height
-	m.listWidth = ClampListWidth(width, listWidth)
-	// Reserve one column for the divider and one for the diff scrollbar.
-	vpWidth := width - m.listWidth - dividerWidth - ScrollbarWidth
-	if vpWidth < 1 {
-		vpWidth = 1
-	}
 	if height < 1 {
 		height = 1
+	}
+	var vpWidth int
+	if m.listHidden {
+		m.listWidth = 0
+		vpWidth = width - ScrollbarWidth
+	} else {
+		m.listWidth = ClampListWidth(width, listWidth)
+		// Reserve one column for the divider and one for the diff scrollbar.
+		vpWidth = width - m.listWidth - dividerWidth - ScrollbarWidth
+	}
+	if vpWidth < 1 {
+		vpWidth = 1
 	}
 	if !m.vpReady {
 		m.vp = viewport.New(vpWidth, height)
@@ -263,48 +550,49 @@ func (m *Model) FocusList() {
 	m.restyleCursorLines()
 }
 
-// CursorDown moves the file selection (list focus) or the diff line cursor
-// (diff focus) down by one.
+// CursorDown moves the node selection (list focus) or the diff line cursor (diff
+// focus) down by one.
 func (m *Model) CursorDown() {
 	if m.focus == FocusDiff {
 		m.lineCursorDown()
 		return
 	}
-	if m.cursor < len(m.rows)-1 {
-		m.cursor++
-	}
-	m.ensureSelectedVisible()
+	m.moveCursor(1)
 }
 
-// CursorUp moves the file selection (list focus) or the diff line cursor (diff
+// CursorUp moves the node selection (list focus) or the diff line cursor (diff
 // focus) up by one.
 func (m *Model) CursorUp() {
 	if m.focus == FocusDiff {
 		m.lineCursorUp()
 		return
 	}
-	if m.cursor > 0 {
-		m.cursor--
+	m.moveCursor(-1)
+}
+
+// moveCursor steps the node selection by delta, clamped, and re-anchors selKey.
+func (m *Model) moveCursor(delta int) {
+	nodes := m.nodes()
+	if len(nodes) == 0 {
+		return
 	}
+	m.cursor += delta
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(nodes) {
+		m.cursor = len(nodes) - 1
+	}
+	m.selKey = nodes[m.cursor].key
 	m.ensureSelectedVisible()
 }
 
-// SelectNext / SelectPrev move the FILE selection by one, irrespective of the
-// current focus. Used by the mouse wheel over the file list so scrolling there
-// always moves the selection (never the diff line cursor).
-func (m *Model) SelectNext() {
-	if m.cursor < len(m.rows)-1 {
-		m.cursor++
-	}
-	m.ensureSelectedVisible()
-}
+// SelectNext / SelectPrev move the node selection by one irrespective of focus.
+// Used by the mouse wheel over the file list so scrolling there always moves the
+// selection (never the diff line cursor).
+func (m *Model) SelectNext() { m.moveCursor(1) }
 
-func (m *Model) SelectPrev() {
-	if m.cursor > 0 {
-		m.cursor--
-	}
-	m.ensureSelectedVisible()
-}
+func (m *Model) SelectPrev() { m.moveCursor(-1) }
 
 // renderedRows is the number of rows shown in the cleaned view.
 func (m *Model) renderedRows() int { return len(m.cleaned.lines) }
@@ -434,13 +722,16 @@ func (m *Model) afterCursorMove() {
 	m.ensureCursorVisible()
 }
 
-// SelectRow sets the file selection to row index i (clamped). Returns true if a
-// valid row was selected. Used by the mouse: click a file row → select it.
+// SelectRow sets the selection to visible-node index i (clamped). Returns true
+// if a valid node was selected. Used by the mouse: click a list line → select
+// that node (a file or a folder).
 func (m *Model) SelectRow(i int) bool {
-	if i < 0 || i >= len(m.rows) {
+	nodes := m.nodes()
+	if i < 0 || i >= len(nodes) {
 		return false
 	}
 	m.cursor = i
+	m.selKey = nodes[i].key
 	m.ensureSelectedVisible()
 	return true
 }
@@ -456,12 +747,17 @@ func (m *Model) ScrollDiff(delta int) {
 	m.vp.SetYOffset(m.vp.YOffset + delta)
 }
 
-// Selected returns the currently selected row and whether one exists.
+// Selected returns the file row under the cursor, if the cursor is on a file (not
+// a folder) and one exists.
 func (m *Model) Selected() (Row, bool) {
-	if m.cursor < 0 || m.cursor >= len(m.rows) {
+	n, ok := m.selectedNode()
+	if !ok || n.kind != fileNode {
 		return Row{}, false
 	}
-	return m.rows[m.cursor], true
+	if n.fileRow < 0 || n.fileRow >= len(m.rows) {
+		return Row{}, false
+	}
+	return m.rows[n.fileRow], true
 }
 
 // SelectedPath returns the selected file path, or "".
@@ -648,18 +944,21 @@ func glyph(g Group, f git.ChangedFile) string {
 	}
 }
 
-// View renders the file list beside the diff viewport plus a scrollbar.
+// View renders the file list beside the diff viewport plus a scrollbar. When the
+// list is hidden, the diff (plus scrollbar) fills the whole width.
 func (m *Model) View() string {
 	if m.IsClean() {
 		return m.renderCleanState()
 	}
 
-	list := m.renderList()
 	diff := m.renderDiff()
-
-	list = lipgloss.NewStyle().Width(m.listWidth).Height(m.totalHeight).Render(list)
-	gap := styles.Divider.Render(verticalBar(m.totalHeight))
 	sb := m.renderScrollbar()
+	if m.listHidden {
+		return lipgloss.JoinHorizontal(lipgloss.Top, diff, sb)
+	}
+
+	list := lipgloss.NewStyle().Width(m.listWidth).Height(m.totalHeight).Render(m.renderList())
+	gap := styles.Divider.Render(verticalBar(m.totalHeight))
 	return lipgloss.JoinHorizontal(lipgloss.Top, list, gap, diff, sb)
 }
 
@@ -754,52 +1053,44 @@ func (m *Model) renderList() string {
 }
 
 // listCells builds every screen line of the list, in order: per non-empty group
-// a blank separator (except before the first) + a header, then the group's files
-// rendered as a folder tree — directory nodes plus indented, wrapped file rows.
+// a blank separator (except before the first) + a header, then the group's nodes
+// (folders + files) rendered with indentation. Each cell is tagged with its
+// visible-node index (-1 for headers/blanks) so the mouse hit-test maps exactly.
 func (m *Model) listCells() []listCell {
 	bodyWidth := m.listWidth - selectBarWidth
 	if bodyWidth < 1 {
 		bodyWidth = m.listWidth
 	}
+	nodes := m.nodes()
 	var cells []listCell
-	first := true
-	for i := 0; i < len(m.rows); {
-		g := m.rows[i].Group
-		start := i
-		for i < len(m.rows) && m.rows[i].Group == g {
-			i++
+	lastGroup := Group(-1)
+	for ni, n := range nodes {
+		if n.group != lastGroup {
+			if lastGroup != -1 {
+				cells = append(cells, listCell{text: "", row: -1})
+			}
+			cells = append(cells, listCell{text: renderGroupHeader(n.group, m.groupFileCount(n.group), m.listWidth), row: -1})
+			lastGroup = n.group
 		}
-		if !first {
-			cells = append(cells, listCell{text: "", row: -1})
-		}
-		first = false
-		cells = append(cells, listCell{text: renderGroupHeader(g, i-start, m.listWidth), row: -1})
-
-		// Emit a folder tree for this group's (already path-sorted) files. Folder
-		// nodes are emitted lazily whenever the directory prefix changes.
-		var prevDirs []string
-		for k := start; k < i; k++ {
-			r := m.rows[k]
-			dirs, base := splitPath(r.File.Path)
-			leaf := base
-			if r.File.OrigPath != "" { // rename: show old → new basenames
-				_, ob := splitPath(r.File.OrigPath)
-				leaf = ob + " → " + base
-			}
-			common := commonPrefixLen(prevDirs, dirs)
-			for d := common; d < len(dirs); d++ {
-				cells = append(cells, listCell{text: m.renderFolderLine(dirs[d], d, bodyWidth), row: -1})
-			}
-			for _, ln := range m.renderFileLines(k, r, len(dirs), leaf, bodyWidth) {
-				cells = append(cells, listCell{text: ln, row: k})
-			}
-			prevDirs = dirs
+		for _, ln := range m.renderNodeLines(ni, n, bodyWidth) {
+			cells = append(cells, listCell{text: ln, row: ni})
 		}
 	}
 	return cells
 }
 
-// selectBarWidth is the width of the left state-bar column on each file row.
+// groupFileCount returns the number of files in group g.
+func (m *Model) groupFileCount(g Group) int {
+	n := 0
+	for _, r := range m.rows {
+		if r.Group == g {
+			n++
+		}
+	}
+	return n
+}
+
+// selectBarWidth is the width of the left state-bar column on each row.
 const selectBarWidth = 1
 
 // indentStep is the per-tree-level indentation in columns.
@@ -812,19 +1103,6 @@ func splitPath(p string) (dirs []string, base string) {
 	}
 	parts := strings.Split(p, "/")
 	return parts[:len(parts)-1], parts[len(parts)-1]
-}
-
-// commonPrefixLen returns how many leading components a and b share.
-func commonPrefixLen(a, b []string) int {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	i := 0
-	for i < n && a[i] == b[i] {
-		i++
-	}
-	return i
 }
 
 // clampIndent caps an indent so a deep tree on a narrow pane still leaves room
@@ -843,61 +1121,107 @@ func clampIndent(indent, bodyWidth int) int {
 	return indent
 }
 
-// renderFolderLine renders a directory node ("name/") at the given depth. Folder
-// nodes are not selectable (row -1) and are styled subordinate to file rows.
-func (m *Model) renderFolderLine(name string, depth, bodyWidth int) string {
-	indent := clampIndent(depth*indentStep, bodyWidth)
-	text := truncCells(strings.Repeat(" ", indent)+name+"/", bodyWidth)
-	return " " + styles.Folder.Width(bodyWidth).Render(text)
+// indentPad builds the left indentation: a dim guide rail (│) per level on normal
+// rows, or plain spaces on selected/hovered rows (where the background already
+// signals the row). Always exactly `indent` display columns wide.
+func (m *Model) indentPad(depth, indent int, highlighted bool) string {
+	if indent <= 0 {
+		return ""
+	}
+	if highlighted {
+		return strings.Repeat(" ", indent)
+	}
+	rail := ansi.Truncate(strings.Repeat("│ ", depth), indent, "")
+	if w := ansi.StringWidth(rail); w < indent {
+		rail += strings.Repeat(" ", indent-w)
+	}
+	return styles.Divider.Render(rail)
 }
 
-// renderFileLines renders one file as one or more screen lines: a left state bar
-// (▌ selected / ▎ diff-focused / blank), tree indentation, the status glyph, and
-// the leaf label — which WRAPS onto continuation lines (indented to align under
-// the label) when it exceeds the pane, so names stay readable. The state bar
-// repeats down every wrapped line so the selected file reads as one block.
-func (m *Model) renderFileLines(i int, r Row, depth int, leaf string, bodyWidth int) []string {
-	gl := glyph(r.Group, r.File)
-
+// renderNodeLines renders one visible node (folder or file) as one or more screen
+// lines: a left state bar (▌ selected / ▎ diff-focused / blank), the indent rail,
+// then a folder (caret + name/ + count) or a file (glyph + label, wrapping onto
+// aligned continuation lines). The state bar repeats down wrapped lines.
+func (m *Model) renderNodeLines(ni int, n node, bodyWidth int) []string {
+	selected := ni == m.cursor
+	hovered := ni == m.hoverRow
 	var style lipgloss.Style
 	var bar string
 	plainText := false // selected rows render plain text for legible contrast
 	switch {
-	case i == m.cursor && m.focus != FocusDiff:
+	case selected && m.focus != FocusDiff:
 		style, bar, plainText = styles.SelectedRow, styles.Branch.Render("▌"), true
-	case i == m.cursor:
+	case selected:
 		style, bar, plainText = styles.SelectedRowInactive, styles.HeaderMuted.Render("▎"), true
-	case i == m.hoverRow:
+	case hovered:
 		style, bar = styles.HoverRow, " "
 	default:
 		style, bar = lipgloss.NewStyle(), " "
 	}
 
-	indent := clampIndent(depth*indentStep, bodyWidth)
-	pad := strings.Repeat(" ", indent)
-	// First line: indent + glyph + space; continuations align under the label.
+	indent := clampIndent(n.depth*indentStep, bodyWidth)
+	rail := m.indentPad(n.depth, indent, selected || hovered)
+
+	if n.kind == folderNode {
+		caret := "▾ "
+		label := n.label + "/"
+		if n.collapsed {
+			caret = "▸ "
+			if n.count > 0 {
+				label += fmt.Sprintf(" (%d)", n.count)
+			}
+		}
+		content := caret + label
+		if !plainText {
+			content = styles.Folder.Render(content)
+		}
+		avail := bodyWidth - indent
+		if avail < 1 {
+			avail = 1
+		}
+		content = truncCells(content, avail)
+		return []string{bar + style.Width(bodyWidth).Render(rail+content)}
+	}
+
+	// File node. Build the styled label once so wrapping (via ansi.Cut) preserves
+	// styling across continuation lines.
+	r := m.rows[n.fileRow]
+	gl := glyph(r.Group, r.File)
+	var labelStyled string
+	switch {
+	case plainText:
+		labelStyled = n.label
+	case !m.treeMode:
+		// Flat list: dim the directory portion, keep the basename bright.
+		dirs, base := splitPath(n.key)
+		if len(dirs) > 0 {
+			labelStyled = styles.Folder.Render(strings.Join(dirs, "/")+"/") + base
+		} else {
+			labelStyled = base
+		}
+	case r.Group == GroupUntracked:
+		labelStyled = styles.UntrackedRow.Render(n.label)
+	default:
+		labelStyled = n.label
+	}
+
 	chunkW := bodyWidth - indent - 2
 	if chunkW < 1 {
 		chunkW = 1
 	}
-	chunks := chunkByWidth(leaf, chunkW)
-
+	chunks := chunkByWidth(labelStyled, chunkW)
 	out := make([]string, 0, len(chunks))
 	for j, ch := range chunks {
-		var prefix string
+		var glyphPart string
 		switch {
 		case j > 0:
-			prefix = pad + "  "
+			glyphPart = "  " // continuation aligns under the label
 		case plainText:
-			prefix = pad + gl + " "
+			glyphPart = gl + " "
 		default:
-			prefix = pad + styles.GlyphStyle(gl).Render(gl) + " "
+			glyphPart = styles.GlyphStyle(gl).Render(gl) + " "
 		}
-		text := ch
-		if !plainText && r.Group == GroupUntracked {
-			text = styles.UntrackedRow.Render(ch)
-		}
-		out = append(out, bar+style.Width(bodyWidth).Render(prefix+text))
+		out = append(out, bar+style.Width(bodyWidth).Render(rail+glyphPart+ch))
 	}
 	return out
 }

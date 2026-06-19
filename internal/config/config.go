@@ -39,6 +39,12 @@ const (
 	// Appended in checklist 03 (UI polish: themes + clean diff). Keep at the end.
 	ActThemePicker   // <leader> t: open the theme picker overlay (live preview)
 	ActToggleRawDiff // ctrl+g: toggle showing the raw (unfiltered) diff
+	// Appended for the file-tree UX. Keep at the end.
+	ActCollapse    // h: collapse the folder under the cursor / go to parent
+	ActExpand      // l: expand the folder under the cursor / step in
+	ActToggleTree  // .: toggle folder-tree vs flat file list
+	ActFocusToggle // tab: move focus between the file tree and the diff contents
+	ActHideTree    // E (shift+e): hide/show the file-tree pane (diff full width)
 )
 
 // Keymap maps keys/chords to actions. Leader is the chord prefix.
@@ -74,6 +80,13 @@ func DefaultKeymap() Keymap {
 			"{":      ActHunkPrev,
 			"ctrl+t": ActToggleAutoRefresh,
 			"ctrl+g": ActToggleRawDiff,
+			"h":      ActCollapse,
+			"left":   ActCollapse,
+			"l":      ActExpand,
+			"right":  ActExpand,
+			".":      ActToggleTree,
+			"tab":    ActFocusToggle,
+			"E":      ActHideTree,
 			"esc":    ActCancel,
 		},
 		chords: map[string]Action{
@@ -96,6 +109,11 @@ func (k Keymap) Bindings() []Binding {
 		{Keys: []string{"ctrl+r"}, Action: ActRecover, Desc: "Recover the last discarded change"},
 		{Keys: []string{"}"}, Action: ActHunkNext, Desc: "Next hunk"},
 		{Keys: []string{"{"}, Action: ActHunkPrev, Desc: "Previous hunk"},
+		{Keys: []string{"h", "left"}, Action: ActCollapse, Desc: "Collapse folder / go to parent"},
+		{Keys: []string{"l", "right"}, Action: ActExpand, Desc: "Expand folder / step in"},
+		{Keys: []string{"."}, Action: ActToggleTree, Desc: "Toggle folder tree / flat list"},
+		{Keys: []string{"tab"}, Action: ActFocusToggle, Desc: "Move focus: file tree ↔ diff contents"},
+		{Keys: []string{"E"}, Action: ActHideTree, Desc: "Hide / show the file-tree pane"},
 		{Keys: []string{">"}, Action: ActPaneGrow, Desc: "Grow the diff pane"},
 		{Keys: []string{"<"}, Action: ActPaneShrink, Desc: "Shrink the diff pane"},
 		{Keys: []string{"r"}, Action: ActRefresh, Desc: "Refresh status"},
