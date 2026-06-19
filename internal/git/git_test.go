@@ -62,6 +62,11 @@ func newRepo(t *testing.T) string {
 	requireGit(t)
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-b", "main")
+	// Persist a repo-local identity so production git calls that create commits
+	// (e.g. Rebase) work even when the environment has no global git identity
+	// (as on CI runners). runGit's -c flags only cover the test's own commands.
+	runGit(t, dir, "config", "user.email", "test@test")
+	runGit(t, dir, "config", "user.name", "test")
 	writeFile(t, dir, "README.md", "hello\n")
 	writeFile(t, dir, "keep.txt", "original\n")
 	runGit(t, dir, "add", "-A")
