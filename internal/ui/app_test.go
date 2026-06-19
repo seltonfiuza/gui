@@ -699,3 +699,85 @@ func TestHoverHighlightsRowUnderPointer(t *testing.T) {
 		t.Fatalf("motion outside the list should clear hover, got %d", a.diff.HoverRow())
 	}
 }
+
+// TestTreeToggleAndFolderKeys covers the file-tree key wiring: "." toggles
+// tree/flat, and Enter/h on a folder toggles it (without focusing the diff).
+func TestTreeToggleAndFolderKeys(t *testing.T) {
+	a := newTestApp()
+	st := &git.Status{Unstaged: []git.ChangedFile{
+		{Path: "internal/ui/app.go", Worktree: git.Modified},
+		{Path: "internal/ui/app_test.go", Worktree: git.Modified},
+	}}
+	a.status = st
+	a.diff.SetStatus(st)
+
+	// "." toggles flat mode off and on.
+	if !a.diff.TreeMode() {
+		t.Fatalf("tree mode should default on")
+	}
+	press(a, ".")
+	if a.diff.TreeMode() {
+		t.Fatalf(". should switch to flat mode")
+	}
+	press(a, ".")
+	if !a.diff.TreeMode() {
+		t.Fatalf(". should switch back to tree mode")
+	}
+
+	// Select the compacted folder node (index 0) and press Enter: it should
+	// toggle the folder and keep focus on the list (not jump into the diff).
+	a.diff.SelectRow(0)
+	pressNamed(a, tea.KeyEnter)
+	if a.diff.Focus() != diffview.FocusList {
+		t.Fatalf("Enter on a folder should not focus the diff pane")
+	}
+}
+
+// TestTabTogglesFocusBetweenTreeAndDiff asserts Tab moves focus between the file
+// tree and the diff contents (and back).
+func TestTabTogglesFocusBetweenTreeAndDiff(t *testing.T) {
+	a := newTestApp()
+	a.diff.SetDiff(a.diff.SelectedPath(), sampleDiff)
+	if a.diff.Focus() != diffview.FocusList {
+		t.Fatalf("focus should start on the file list")
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.diff.Focus() != diffview.FocusDiff {
+		t.Fatalf("tab should move focus to the diff contents")
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.diff.Focus() != diffview.FocusList {
+		t.Fatalf("tab again should move focus back to the file tree")
+	}
+}
+
+// TestHideTreeTogglesPane asserts Shift+E hides/shows the file-tree pane, focuses
+// the diff when hidden, keeps the view height exact, and routes body clicks to
+// the diff while hidden.
+func TestHideTreeTogglesPane(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	a := newTestApp()
+	a.diff.SetDiff("a.go", sampleDiff)
+	if a.diff.ListHidden() {
+		t.Fatalf("tree should start visible")
+	}
+	press(a, "E")
+	if !a.diff.ListHidden() {
+		t.Fatalf("E should hide the tree")
+	}
+	if a.diff.Focus() != diffview.FocusDiff {
+		t.Fatalf("hiding the tree should focus the diff")
+	}
+	if got := lipgloss.Height(a.View()); got != a.height {
+		t.Fatalf("hidden view height=%d want %d", got, a.height)
+	}
+	// With the tree hidden a click in the body hits the diff, never the list.
+	h := hitTest(a.currentLayout(), 5, 3)
+	if h.region != hitDiff {
+		t.Fatalf("with tree hidden, body click should hit the diff, got %v", h.region)
+	}
+	press(a, "E")
+	if a.diff.ListHidden() {
+		t.Fatalf("E should show the tree again")
+	}
+}

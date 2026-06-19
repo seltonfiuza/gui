@@ -499,6 +499,7 @@ func (a *App) currentLayout() layout {
 		listWidth:      a.listWidth,
 		scrollbarWidth: diffview.ScrollbarWidth,
 		diffYOffset:    a.diff.ViewportYOffset(),
+		listHidden:     a.diff.ListHidden(),
 	}
 }
 
@@ -575,6 +576,10 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case hitList:
 		if row, ok := a.diff.ListLineToRow(h.line); ok {
 			a.diff.SelectRow(row)
+			// Clicking a folder toggles it; clicking a file selects + loads it.
+			if a.diff.Activate() {
+				return a, nil
+			}
 			a.diff.FocusList()
 			return a, a.refreshDiffCmd()
 		}
@@ -727,12 +732,56 @@ func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.diff.CursorUp()
 		return a, a.refreshDiffCmd()
 	case config.ActConfirm:
-		// Focus the diff pane so j/k move the line cursor, ensuring it's loaded.
+		// On a folder, enter/space toggles it; on a file, focus the diff pane so
+		// j/k move the line cursor.
+		if a.diff.Activate() {
+			return a, nil
+		}
 		a.diff.FocusDiff()
 		return a, a.refreshDiffCmd()
 	case config.ActCancel:
 		// Return focus to the file list.
 		a.diff.FocusList()
+		return a, nil
+	case config.ActFocusToggle:
+		// Tab moves focus between the file tree and the diff contents. With the
+		// tree hidden there's nothing to focus but the diff, so it's a no-op.
+		if a.diff.ListHidden() {
+			return a, nil
+		}
+		if a.diff.Focus() == diffview.FocusDiff {
+			a.diff.FocusList()
+			return a, nil
+		}
+		a.diff.FocusDiff()
+		return a, a.refreshDiffCmd()
+	case config.ActHideTree:
+		hidden := !a.diff.ListHidden()
+		a.diff.SetListHidden(hidden)
+		if hidden {
+			a.diff.FocusDiff()
+			a.toast = "file tree: hidden (E to show)"
+		} else {
+			a.diff.FocusList()
+			a.toast = "file tree: shown"
+		}
+		a.applyLayout()
+		return a, a.refreshDiffCmd()
+	case config.ActCollapse:
+		a.diff.FocusList()
+		a.diff.Collapse()
+		return a, a.refreshDiffCmd()
+	case config.ActExpand:
+		a.diff.FocusList()
+		a.diff.Expand()
+		return a, a.refreshDiffCmd()
+	case config.ActToggleTree:
+		a.diff.ToggleTreeMode()
+		if a.diff.TreeMode() {
+			a.toast = "file tree: on"
+		} else {
+			a.toast = "file tree: off (flat)"
+		}
 		return a, nil
 	case config.ActHunkNext:
 		a.diff.HunkNext()
@@ -1053,7 +1102,7 @@ func (a *App) footerHint() string {
 	if !a.autoRefresh {
 		auto = "off"
 	}
-	return "j/k move · enter focus diff · u hunk · U file · ctrl+r recover · } { hunk · < > resize · s stage · r refresh · ctrl+t auto:" + auto + " · space b branches · space t theme · ? help · q quit"
+	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · r refresh · ctrl+t auto:" + auto + " · space b branches · space t theme · ? help · q quit"
 }
 
 func (a *App) renderFooter() string {

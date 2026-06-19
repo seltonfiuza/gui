@@ -24,12 +24,13 @@ type hit struct {
 // layout is the geometry the hit-test needs. All coordinates are 0-based screen
 // columns/rows; (x,y) is the click position.
 type layout struct {
-	headerHeight   int // rows occupied by the header (body starts at this y)
-	bodyHeight     int // visible rows of the body (list/diff area)
-	width          int // total terminal width
-	listWidth      int // width of the file-list pane (columns [0,listWidth))
-	scrollbarWidth int // columns reserved for the diff scrollbar at the right edge
-	diffYOffset    int // diff viewport scroll offset (rendered rows scrolled past top)
+	headerHeight   int  // rows occupied by the header (body starts at this y)
+	bodyHeight     int  // visible rows of the body (list/diff area)
+	width          int  // total terminal width
+	listWidth      int  // width of the file-list pane (columns [0,listWidth))
+	scrollbarWidth int  // columns reserved for the diff scrollbar at the right edge
+	diffYOffset    int  // diff viewport scroll offset (rendered rows scrolled past top)
+	listHidden     bool // when true the list pane is hidden and the body is all diff
 }
 
 // dividerColumn returns the x column the vertical divider occupies.
@@ -52,6 +53,13 @@ func hitTest(l layout, x, y int) hit {
 		return hit{region: hitNone}
 	}
 	bodyLine := y - bodyTop
+	if l.listHidden {
+		// No list/divider: the whole body (minus the scrollbar column) is diff.
+		if x >= l.width-l.scrollbarWidth {
+			return hit{region: hitNone}
+		}
+		return hit{region: hitDiff, line: bodyLine + l.diffYOffset}
+	}
 	switch {
 	case x < l.listWidth:
 		return hit{region: hitList, line: bodyLine}
