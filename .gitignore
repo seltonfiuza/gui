@@ -4,3 +4,6 @@ docs/*
 
 # build artifact
 /gui
+
+# goreleaser output
+dist/

@@ -134,9 +134,10 @@ type App struct {
 	// is cleared on the next successful background status.
 	bgErrShown bool
 
-	toast  string
-	width  int
-	height int
+	toast   string
+	version string // build version, shown bottom-left in the footer
+	width   int
+	height  int
 }
 
 // autoRefreshInterval is the polling cadence for the background refresh tick.
@@ -161,12 +162,15 @@ type confirmState struct {
 	onYes func(*App) tea.Cmd
 }
 
-// New constructs the root model. It satisfies the contract expected by main.go:
-// New(repo *git.Service) returns a tea.Model. It loads persisted config and
-// applies the saved theme so the UI launches in the user's preferred colors.
-func New(repo *git.Service) tea.Model {
+// New constructs the root model. version is the build version shown in the
+// footer (pass "dev" for local builds). It loads persisted config and applies
+// the saved theme so the UI launches in the user's preferred colors.
+func New(repo *git.Service, version string) tea.Model {
 	cfg, _ := config.Load()
 	styles.SetTheme(cfg.Theme)
+	if version == "" {
+		version = "dev"
+	}
 	return &App{
 		repo:        repo,
 		cfg:         cfg,
@@ -178,6 +182,7 @@ func New(repo *git.Service) tea.Model {
 		theme:       themepicker.New(),
 		listWidth:   defaultListWidth,
 		autoRefresh: true,
+		version:     version,
 	}
 }
 
@@ -1106,15 +1111,18 @@ func (a *App) footerHint() string {
 }
 
 func (a *App) renderFooter() string {
-	var line string
+	var body string
 	switch {
 	case a.confirm != nil:
-		line = styles.Toast.Render("y confirm · n cancel")
+		body = styles.Toast.Render("y confirm · n cancel")
 	case a.toast != "":
-		line = styles.Toast.Render(a.toast)
+		body = styles.Toast.Render(a.toast)
 	default:
-		line = styles.Hint.Render(a.footerHint())
+		body = styles.Hint.Render(a.footerHint())
 	}
+	// Version badge pinned bottom-left, then the hint/toast fills the rest.
+	left := styles.Version.Render("gui " + a.version)
+	line := left + styles.HeaderSep.Render(" · ") + body
 	return styles.Header.Render(fitWidth(line, a.width-2))
 }
 

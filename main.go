@@ -13,7 +13,22 @@ import (
 	"github.com/selton/gui/internal/ui"
 )
 
+// Build metadata, injected at release time via -ldflags -X (see .goreleaser.yaml).
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-v", "version":
+			fmt.Printf("gui %s (%s, %s)\n", version, commit, date)
+			return
+		}
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gui:", err)
@@ -30,7 +45,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(ui.New(repo), tea.WithAltScreen())
+	p := tea.NewProgram(ui.New(repo, version), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "gui:", err)
 		os.Exit(1)
