@@ -724,6 +724,29 @@ func (s *Service) Rebase(onto string) error {
 	return err
 }
 
+// Commit records the staged changes as a new commit with the given message.
+// It does not stage anything itself, mirroring `git commit` — the message is
+// passed via stdin (-F -) so newlines and shell-significant characters survive.
+func (s *Service) Commit(message string) error {
+	cmd := exec.Command("git", "commit", "-F", "-")
+	cmd.Dir = s.root
+	cmd.Stdin = strings.NewReader(message)
+	var out, stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(out.String())
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		return fmt.Errorf("git commit: %s", msg)
+	}
+	return nil
+}
+
 // RebaseInProgress reports whether a rebase is currently in progress.
 func (s *Service) RebaseInProgress() (bool, error) {
 	out, err := s.run("rev-parse", "--git-dir")

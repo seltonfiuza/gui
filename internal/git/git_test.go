@@ -338,6 +338,40 @@ func TestStageAllUnstageAll(t *testing.T) {
 	}
 }
 
+func TestCommit(t *testing.T) {
+	dir := newRepo(t)
+	svc, _ := Open(dir)
+
+	// Nothing staged: commit must fail rather than create an empty commit.
+	if err := svc.Commit("empty"); err == nil {
+		t.Fatal("Commit with nothing staged should error")
+	}
+
+	writeFile(t, dir, "new.txt", "content\n")
+	if err := svc.Stage("new.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Commit("add new.txt\n\nbody line"); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	// The staged change is now committed: the working tree is clean.
+	st, _ := svc.Status()
+	if len(st.Staged) != 0 || len(st.Unstaged) != 0 || len(st.Untracked) != 0 {
+		t.Errorf("after Commit, working tree should be clean: %+v", st)
+	}
+
+	// The message (subject + body, including newlines) round-trips.
+	subject := strings.TrimSpace(runGit(t, dir, "log", "-1", "--pretty=%s"))
+	if subject != "add new.txt" {
+		t.Errorf("commit subject = %q, want %q", subject, "add new.txt")
+	}
+	body := strings.TrimSpace(runGit(t, dir, "log", "-1", "--pretty=%b"))
+	if body != "body line" {
+		t.Errorf("commit body = %q, want %q", body, "body line")
+	}
+}
+
 func TestDiffTracked(t *testing.T) {
 	dir := newRepo(t)
 	svc, _ := Open(dir)

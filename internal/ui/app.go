@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -126,6 +127,9 @@ type App struct {
 	// pending confirmation for a destructive file op (discard).
 	confirm *confirmState
 
+	// commit is the active commit-message dialog, or nil when closed.
+	commit *commitState
+
 	// undo is a LIFO stack of discarded changes that ctrl+r can recover. Capped
 	// at undoStackCap; oldest entries are dropped when the cap is exceeded.
 	undo []undoEntry
@@ -176,6 +180,16 @@ type confirmState struct {
 	// onYes is the action to perform when accepted.
 	onYes func(*App) tea.Cmd
 }
+
+// commitState is the modal commit-message dialog: a single-line text input plus
+// the staged-file count shown for context. enter commits, esc cancels.
+type commitState struct {
+	input  textinput.Model
+	staged int
+}
+
+// commitDoneMsg is emitted after a commit attempt completes.
+type commitDoneMsg struct{ err error }
 
 // New constructs the root model. version is the build version shown in the
 // footer (pass "dev" for local builds). It loads persisted config and applies
@@ -358,6 +372,9 @@ func statusFingerprint(s *git.Status) string {
 // interrupt typing). The underlying status data may still be refreshed.
 func (a *App) overlayActive() bool {
 	if a.confirm != nil {
+		return true
+	}
+	if a.commit != nil {
 		return true
 	}
 	if a.active == viewHelp {
@@ -552,6 +569,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case mutationDoneMsg:
 		return a.handleMutationDone(msg)
 
+	case commitDoneMsg:
+		if msg.err != nil {
+			a.toast = msg.err.Error()
+			return a, nil
+		}
+		a.toast = "committed"
+		// Force the selected file's diff to reload — its staged content is gone.
+		a.forceDiffReload = true
+		return a, a.loadStatusCmd()
+
 	case needsForceDeleteMsg:
 		a.branch.EscalateToForceDelete(msg.name)
 		return a, nil
@@ -578,13 +605,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // currentLayout snapshots the geometry the mouse hit-test needs.
 func (a *App) currentLayout() layout {
 	return layout{
-		headerHeight:   1,
-		bodyHeight:     a.bodyHeight(),
-		width:          a.width,
-		listWidth:      a.listWidth,
-		scrollbarWidth: diffview.ScrollbarWidth,
-		diffYOffset:    a.diff.ViewportYOffset(),
-		listHidden:     a.diff.ListHidden(),
+		headerHeight:    1,
+		bodyHeight:      a.bodyHeight(),
+		width:           a.width,
+		listWidth:       a.listWidth,
+		scrollbarWidth:  diffview.ScrollbarWidth,
+		diffYOffset:     a.diff.ViewportYOffset(),
+		listHidden:      a.diff.ListHidden(),
+		commitBarHeight: a.diff.CommitBarHeight(),
 	}
 }
 
@@ -598,7 +626,7 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 	// While an overlay is open, ignore mouse input entirely.
-	if a.active != viewDiff || a.confirm != nil {
+	if a.active != viewDiff || a.confirm != nil || a.commit != nil {
 		return a, nil
 	}
 
@@ -655,6 +683,9 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch h.region {
+	case hitCommit:
+		// Clicking the commit affordance opens the commit dialog (same as ⇧C).
+		return a.openCommit()
 	case hitDivider:
 		a.dragging = true
 		return a, nil
@@ -714,6 +745,11 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global hard quit.
 	if key == "ctrl+c" {
 		return a, tea.Quit
+	}
+
+	// Commit dialog captures everything (text entry).
+	if a.commit != nil {
+		return a.handleCommitKey(msg)
 	}
 
 	// Confirm dialog captures everything.
@@ -902,6 +938,8 @@ func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case config.ActStageToggle:
 		return a, a.stageToggleCmd()
+	case config.ActCommit:
+		return a.openCommit()
 	case config.ActUndo:
 		return a.discardHunk()
 	case config.ActUndoFile:
@@ -939,6 +977,56 @@ func (a *App) stageToggleCmd() tea.Cmd {
 		return fileMutationCmd(func() error { return repo.Unstage(path) })
 	}
 	return fileMutationCmd(func() error { return repo.Stage(path) })
+}
+
+// openCommit opens the commit-message dialog. It refuses (with a toast) when
+// there is nothing staged, mirroring `git commit` rejecting an empty commit.
+func (a *App) openCommit() (tea.Model, tea.Cmd) {
+	staged := 0
+	if a.status != nil {
+		staged = len(a.status.Staged)
+	}
+	if staged == 0 {
+		a.toast = "nothing staged to commit — press s to stage a file"
+		return a, nil
+	}
+	ti := textinput.New()
+	ti.Placeholder = "commit message"
+	ti.CharLimit = 0 // no limit; long messages wrap in git
+	a.commit = &commitState{input: ti, staged: staged}
+	a.toast = ""
+	// Focus the stored input (not the local copy) so it actually receives keys.
+	return a, a.commit.input.Focus()
+}
+
+// handleCommitKey routes a key to the commit dialog: enter commits, esc cancels,
+// everything else feeds the text input.
+func (a *App) handleCommitKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		a.commit = nil
+		return a, nil
+	case "enter":
+		message := strings.TrimSpace(a.commit.input.Value())
+		if message == "" {
+			// Keep the dialog open; an empty message can't be committed.
+			a.commit.input.Placeholder = "a commit message is required"
+			return a, nil
+		}
+		a.commit = nil
+		return a, a.commitCmd(message)
+	}
+	var cmd tea.Cmd
+	a.commit.input, cmd = a.commit.input.Update(msg)
+	return a, cmd
+}
+
+// commitCmd commits the staged changes with the given message off the UI thread.
+func (a *App) commitCmd(message string) tea.Cmd {
+	repo := a.repo
+	return func() tea.Msg {
+		return commitDoneMsg{err: repo.Commit(message)}
+	}
 }
 
 // pushUndo records a recoverable discarded change on the LIFO stack, dropping
@@ -1105,6 +1193,8 @@ func (a *App) View() string {
 
 	var body string
 	switch {
+	case a.commit != nil:
+		body = a.renderCommitOverlay(a.width, a.bodyHeight())
 	case a.confirm != nil:
 		// A pending confirmation renders as a centered modal over the body, so the
 		// header/footer stay a single row each (the old footer-rendered bordered
@@ -1203,18 +1293,20 @@ func (a *App) renderHeader() string {
 // stays on one row instead of being aggressively ellipsized.
 func (a *App) footerHint() string {
 	if a.width < 100 {
-		return "j/k move · enter diff · s stage · u/U discard · ? help · q quit"
+		return "j/k move · enter diff · s stage · C commit · u/U discard · ? help · q quit"
 	}
 	auto := "on"
 	if !a.autoRefresh {
 		auto = "off"
 	}
-	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · r refresh · ctrl+t auto:" + auto + " · space b branches · space p requests · space t theme · ? help · q quit"
+	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · C commit · r refresh · ctrl+t auto:" + auto + " · space b branches · space t theme · ? help · q quit"
 }
 
 func (a *App) renderFooter() string {
 	var body string
 	switch {
+	case a.commit != nil:
+		body = styles.Hint.Render("enter commit · esc cancel")
 	case a.confirm != nil:
 		body = styles.Toast.Render("y confirm · n cancel")
 	case a.toast != "":
@@ -1226,6 +1318,24 @@ func (a *App) renderFooter() string {
 	left := styles.Version.Render("gui " + a.version)
 	line := left + styles.HeaderSep.Render(" · ") + body
 	return styles.Header.Render(fitWidth(line, a.width-2))
+}
+
+// renderCommitOverlay renders the commit-message dialog as a centered modal: a
+// title, the staged-file count, the text input, and key hints.
+func (a *App) renderCommitOverlay(width, height int) string {
+	if a.commit == nil {
+		return ""
+	}
+	title := styles.OverlayTitle.Render("Commit")
+	noun := "files"
+	if a.commit.staged == 1 {
+		noun = "file"
+	}
+	ctx := styles.Desc.Render(fmt.Sprintf("%d staged %s", a.commit.staged, noun))
+	hint := styles.Desc.Render("enter commit · esc cancel")
+	box := styles.Confirm.Render(lipgloss.JoinVertical(lipgloss.Left,
+		title, "", ctx, "", a.commit.input.View(), "", hint))
+	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
 }
 
 // renderConfirmOverlay renders the pending confirmation as a centered modal.
