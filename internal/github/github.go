@@ -3,7 +3,13 @@
 package github
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os/exec"
+	"strconv"
+	"strings"
 
 	"github.com/seltonfiuza/gui/internal/git"
 )
@@ -71,6 +77,271 @@ func (s *Service) Token() (string, error)         { panic("not implemented") }
 func (s *Service) SetToken(pat string) error      { panic("not implemented") }
 func (s *Service) ClearToken() error              { panic("not implemented") }
 
-func (s *Service) ListPRs(repo *git.Remote) ([]PR, error)                { panic("not implemented") }
-func (s *Service) ViewPR(repo *git.Remote, number int) (PR, error)       { panic("not implemented") }
+// ListPRs returns the open pull/merge requests for repo. GitLab hosts are
+// queried via the glab CLI (merge requests); all other hosts via the gh CLI
+// (pull requests). The chosen CLI must be installed and authenticated.
+func (s *Service) ListPRs(repo *git.Remote) ([]PR, error) {
+	if repo == nil || repo.Owner == "" || repo.Repo == "" {
+		return nil, errors.New("no origin remote configured")
+	}
+	if isGitLab(repo.Host) {
+		return listGitLabMRs(repo)
+	}
+	return listGitHubPRs(repo)
+}
+
+// ViewPR returns a single pull/merge request with its body (Body) and pipeline
+// / checks status (ChecksSummary) populated.
+func (s *Service) ViewPR(repo *git.Remote, number int) (PR, error) {
+	if repo == nil || repo.Owner == "" || repo.Repo == "" {
+		return PR{}, errors.New("no origin remote configured")
+	}
+	if isGitLab(repo.Host) {
+		return viewGitLabMR(repo, number)
+	}
+	return viewGitHubPR(repo, number)
+}
+
+// PRDiff returns the unified diff for a single pull/merge request.
+func (s *Service) PRDiff(repo *git.Remote, number int) (string, error) {
+	if repo == nil || repo.Owner == "" || repo.Repo == "" {
+		return "", errors.New("no origin remote configured")
+	}
+	if isGitLab(repo.Host) {
+		return runCLI("glab", "mr", "diff", strconv.Itoa(number), "-R", prRepoArg(repo))
+	}
+	return runCLI("gh", "pr", "diff", strconv.Itoa(number), "-R", prRepoArg(repo))
+}
+
 func (s *Service) CreatePR(repo *git.Remote, o CreatePROpts) (PR, error) { panic("not implemented") }
+
+// viewGitLabMR fetches a single merge request via `glab mr view`.
+func viewGitLabMR(repo *git.Remote, number int) (PR, error) {
+	out, err := runCLI("glab", "mr", "view", strconv.Itoa(number),
+		"-R", prRepoArg(repo), "--output", "json")
+	if err != nil {
+		return PR{}, err
+	}
+	var raw struct {
+		IID         int    `json:"iid"`
+		Title       string `json:"title"`
+		State       string `json:"state"`
+		Description string `json:"description"`
+		Author      struct {
+			Username string `json:"username"`
+		} `json:"author"`
+		SourceBranch string `json:"source_branch"`
+		TargetBranch string `json:"target_branch"`
+		WebURL       string `json:"web_url"`
+		Draft        bool   `json:"draft"`
+		HeadPipeline *struct {
+			Status string `json:"status"`
+		} `json:"head_pipeline"`
+		Pipeline *struct {
+			Status string `json:"status"`
+		} `json:"pipeline"`
+	}
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return PR{}, fmt.Errorf("parse glab output: %w", err)
+	}
+	status := "none"
+	if raw.HeadPipeline != nil && raw.HeadPipeline.Status != "" {
+		status = raw.HeadPipeline.Status
+	} else if raw.Pipeline != nil && raw.Pipeline.Status != "" {
+		status = raw.Pipeline.Status
+	}
+	return PR{
+		Number:        raw.IID,
+		Title:         raw.Title,
+		State:         raw.State,
+		Author:        raw.Author.Username,
+		HeadRef:       raw.SourceBranch,
+		BaseRef:       raw.TargetBranch,
+		URL:           raw.WebURL,
+		Body:          raw.Description,
+		Draft:         raw.Draft,
+		ChecksSummary: status,
+	}, nil
+}
+
+// viewGitHubPR fetches a single pull request via `gh pr view`.
+func viewGitHubPR(repo *git.Remote, number int) (PR, error) {
+	out, err := runCLI("gh", "pr", "view", strconv.Itoa(number),
+		"-R", prRepoArg(repo),
+		"--json", "number,title,state,author,headRefName,baseRefName,url,isDraft,body,statusCheckRollup")
+	if err != nil {
+		return PR{}, err
+	}
+	var raw struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		State  string `json:"state"`
+		Body   string `json:"body"`
+		Author struct {
+			Login string `json:"login"`
+		} `json:"author"`
+		HeadRefName       string `json:"headRefName"`
+		BaseRefName       string `json:"baseRefName"`
+		URL               string `json:"url"`
+		IsDraft           bool   `json:"isDraft"`
+		StatusCheckRollup []struct {
+			Conclusion string `json:"conclusion"`
+			State      string `json:"state"`
+		} `json:"statusCheckRollup"`
+	}
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return PR{}, fmt.Errorf("parse gh output: %w", err)
+	}
+	return PR{
+		Number:        raw.Number,
+		Title:         raw.Title,
+		State:         raw.State,
+		Author:        raw.Author.Login,
+		HeadRef:       raw.HeadRefName,
+		BaseRef:       raw.BaseRefName,
+		URL:           raw.URL,
+		Body:          raw.Body,
+		Draft:         raw.IsDraft,
+		ChecksSummary: summarizeChecks(raw.StatusCheckRollup),
+	}, nil
+}
+
+// summarizeChecks reduces a gh statusCheckRollup into a compact pass/fail/pending
+// summary string.
+func summarizeChecks(rollup []struct {
+	Conclusion string `json:"conclusion"`
+	State      string `json:"state"`
+}) string {
+	if len(rollup) == 0 {
+		return "none"
+	}
+	var pass, fail, pending int
+	for _, c := range rollup {
+		v := c.Conclusion
+		if v == "" {
+			v = c.State
+		}
+		switch strings.ToUpper(v) {
+		case "SUCCESS", "NEUTRAL", "SKIPPED":
+			pass++
+		case "FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED":
+			fail++
+		default:
+			pending++
+		}
+	}
+	return fmt.Sprintf("%d passed · %d failed · %d pending", pass, fail, pending)
+}
+
+// isGitLab reports whether host is a GitLab instance (gitlab.com or a
+// self-hosted instance such as gitlab.delfos.im).
+func isGitLab(host string) bool { return strings.Contains(host, "gitlab") }
+
+// prRepoArg returns the repository selector passed to gh/glab via -R. The
+// original remote URL is preferred because it carries the host unambiguously
+// (needed for self-hosted instances); it falls back to host/owner/repo.
+func prRepoArg(repo *git.Remote) string {
+	if repo.URL != "" {
+		return repo.URL
+	}
+	if repo.Host != "" {
+		return repo.Host + "/" + repo.Owner + "/" + repo.Repo
+	}
+	return repo.Owner + "/" + repo.Repo
+}
+
+// listGitHubPRs lists open pull requests via `gh pr list`.
+func listGitHubPRs(repo *git.Remote) ([]PR, error) {
+	out, err := runCLI("gh", "pr", "list",
+		"-R", prRepoArg(repo),
+		"--json", "number,title,state,author,headRefName,baseRefName,url,isDraft",
+		"--limit", "50")
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		State  string `json:"state"`
+		Author struct {
+			Login string `json:"login"`
+		} `json:"author"`
+		HeadRefName string `json:"headRefName"`
+		BaseRefName string `json:"baseRefName"`
+		URL         string `json:"url"`
+		IsDraft     bool   `json:"isDraft"`
+	}
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return nil, fmt.Errorf("parse gh output: %w", err)
+	}
+	prs := make([]PR, 0, len(raw))
+	for _, r := range raw {
+		prs = append(prs, PR{
+			Number:  r.Number,
+			Title:   r.Title,
+			State:   r.State,
+			Author:  r.Author.Login,
+			HeadRef: r.HeadRefName,
+			BaseRef: r.BaseRefName,
+			URL:     r.URL,
+			Draft:   r.IsDraft,
+		})
+	}
+	return prs, nil
+}
+
+// listGitLabMRs lists open merge requests via `glab mr list`.
+func listGitLabMRs(repo *git.Remote) ([]PR, error) {
+	out, err := runCLI("glab", "mr", "list",
+		"-R", prRepoArg(repo),
+		"--output", "json")
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		IID    int    `json:"iid"`
+		Title  string `json:"title"`
+		State  string `json:"state"`
+		Author struct {
+			Username string `json:"username"`
+		} `json:"author"`
+		SourceBranch string `json:"source_branch"`
+		TargetBranch string `json:"target_branch"`
+		WebURL       string `json:"web_url"`
+		Draft        bool   `json:"draft"`
+	}
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		return nil, fmt.Errorf("parse glab output: %w", err)
+	}
+	prs := make([]PR, 0, len(raw))
+	for _, r := range raw {
+		prs = append(prs, PR{
+			Number:  r.IID,
+			Title:   r.Title,
+			State:   r.State,
+			Author:  r.Author.Username,
+			HeadRef: r.SourceBranch,
+			BaseRef: r.TargetBranch,
+			URL:     r.WebURL,
+			Draft:   r.Draft,
+		})
+	}
+	return prs, nil
+}
+
+// runCLI executes an external CLI (gh/glab), returning stdout. On failure it
+// returns an error including trimmed stderr.
+func runCLI(name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	var out, stderr bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return out.String(), fmt.Errorf("%s: %s", name, msg)
+	}
+	return out.String(), nil
+}
