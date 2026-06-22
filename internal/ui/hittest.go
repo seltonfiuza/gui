@@ -10,6 +10,7 @@ type hitRegion int
 const (
 	hitNone    hitRegion = iota
 	hitList              // inside the file-list pane (line is body-local list line)
+	hitCommit            // on the commit affordance at the bottom of the file list
 	hitDivider           // on the vertical divider between list and diff
 	hitDiff              // inside the diff pane (line is a rendered diff row)
 )
@@ -24,13 +25,14 @@ type hit struct {
 // layout is the geometry the hit-test needs. All coordinates are 0-based screen
 // columns/rows; (x,y) is the click position.
 type layout struct {
-	headerHeight   int  // rows occupied by the header (body starts at this y)
-	bodyHeight     int  // visible rows of the body (list/diff area)
-	width          int  // total terminal width
-	listWidth      int  // width of the file-list pane (columns [0,listWidth))
-	scrollbarWidth int  // columns reserved for the diff scrollbar at the right edge
-	diffYOffset    int  // diff viewport scroll offset (rendered rows scrolled past top)
-	listHidden     bool // when true the list pane is hidden and the body is all diff
+	headerHeight    int  // rows occupied by the header (body starts at this y)
+	bodyHeight      int  // visible rows of the body (list/diff area)
+	width           int  // total terminal width
+	listWidth       int  // width of the file-list pane (columns [0,listWidth))
+	scrollbarWidth  int  // columns reserved for the diff scrollbar at the right edge
+	diffYOffset     int  // diff viewport scroll offset (rendered rows scrolled past top)
+	listHidden      bool // when true the list pane is hidden and the body is all diff
+	commitBarHeight int  // rows the commit affordance occupies at the list pane's bottom (0 = none)
 }
 
 // dividerColumn returns the x column the vertical divider occupies.
@@ -62,6 +64,11 @@ func hitTest(l layout, x, y int) hit {
 	}
 	switch {
 	case x < l.listWidth:
+		// The bottom commitBarHeight rows of the list pane are the commit
+		// affordance, not file rows.
+		if l.commitBarHeight > 0 && bodyLine >= l.bodyHeight-l.commitBarHeight {
+			return hit{region: hitCommit}
+		}
 		return hit{region: hitList, line: bodyLine}
 	case x == l.dividerColumn():
 		return hit{region: hitDivider}
