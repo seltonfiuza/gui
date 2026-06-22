@@ -128,6 +128,44 @@ func TestDiscardUntrackedRequiresConfirm(t *testing.T) {
 	}
 }
 
+func TestCommitDialogAcceptsTyping(t *testing.T) {
+	a := newTestApp() // stages a.go
+
+	press(a, "C")
+	if a.commit == nil {
+		t.Fatal("C should open the commit dialog")
+	}
+	if a.commit.staged != 1 {
+		t.Fatalf("dialog staged count = %d, want 1", a.commit.staged)
+	}
+
+	// The input must be focused so keystrokes register (regression: focusing a
+	// throwaway copy left the stored input unfocused, swallowing all typing).
+	press(a, "fix the bug")
+	if got := a.commit.input.Value(); got != "fix the bug" {
+		t.Fatalf("commit input = %q, want %q (input not focused?)", got, "fix the bug")
+	}
+
+	pressNamed(a, tea.KeyEscape)
+	if a.commit != nil {
+		t.Fatal("esc should close the commit dialog")
+	}
+}
+
+func TestCommitWithNothingStagedToasts(t *testing.T) {
+	a := newTestApp()
+	a.status.Staged = nil
+	a.diff.SetStatus(a.status)
+
+	press(a, "C")
+	if a.commit != nil {
+		t.Fatal("commit dialog should not open with nothing staged")
+	}
+	if !strings.Contains(a.toast, "nothing staged") {
+		t.Fatalf("expected a 'nothing staged' toast, got %q", a.toast)
+	}
+}
+
 func TestViewRendersWithoutPanic(t *testing.T) {
 	a := newTestApp()
 	if a.View() == "" {

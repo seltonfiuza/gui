@@ -69,6 +69,9 @@ type Model struct {
 	collapsed map[string]bool
 	// listHidden hides the file-list pane entirely (the diff fills the width).
 	listHidden bool
+	// commitEnabled shows the commit affordance pinned to the bottom of the file
+	// list. On by default; the ⇧C key (handled by the root App) opens the dialog.
+	commitEnabled bool
 	// hoverRow is the visible-node index currently under the mouse pointer, or -1
 	// when nothing is hovered. Purely a visual affordance.
 	hoverRow int
@@ -97,7 +100,25 @@ type Model struct {
 
 // New builds an empty diff panel.
 func New() Model {
-	return Model{hoverRow: -1, treeMode: true, collapsed: map[string]bool{}}
+	return Model{hoverRow: -1, treeMode: true, collapsed: map[string]bool{}, commitEnabled: true}
+}
+
+// SetCommitEnabled toggles the commit affordance at the bottom of the file list.
+func (m *Model) SetCommitEnabled(b bool) { m.commitEnabled = b }
+
+// CommitEnabled reports whether the commit affordance is shown.
+func (m *Model) CommitEnabled() bool { return m.commitEnabled }
+
+// StagedCount returns the number of staged files (what a commit would include).
+func (m *Model) StagedCount() int { return m.groupFileCount(GroupStaged) }
+
+// CommitBarHeight returns the rows the commit affordance occupies at the bottom
+// of the file list (0 when it is not shown). Used by the mouse hit-test.
+func (m *Model) CommitBarHeight() int {
+	if m.commitBarVisible() {
+		return commitBarLines
+	}
+	return 0
 }
 
 // SetHoverRow sets the visible-node index under the mouse pointer (-1 for none).
@@ -957,9 +978,63 @@ func (m *Model) View() string {
 		return lipgloss.JoinHorizontal(lipgloss.Top, diff, sb)
 	}
 
-	list := lipgloss.NewStyle().Width(m.listWidth).Height(m.totalHeight).Render(m.renderList())
+	list := lipgloss.NewStyle().Width(m.listWidth).Height(m.listHeight()).Render(m.renderList())
+	leftCol := list
+	if m.commitBarVisible() {
+		leftCol = lipgloss.JoinVertical(lipgloss.Left, list, m.renderCommitBar())
+	}
 	gap := styles.Divider.Render(verticalBar(m.totalHeight))
-	return lipgloss.JoinHorizontal(lipgloss.Top, list, gap, diff, sb)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftCol, gap, diff, sb)
+}
+
+// commitBarLines is the number of screen rows the commit affordance occupies at
+// the bottom of the file list: a separator rule plus the label/keycap line.
+const commitBarLines = 2
+
+// commitBarVisible reports whether the commit affordance is rendered: enabled,
+// the list pane visible, and the pane tall enough to spare the rows.
+func (m *Model) commitBarVisible() bool {
+	return m.commitEnabled && !m.listHidden && m.totalHeight > commitBarLines
+}
+
+// listHeight is the height available to the scrollable file list, reserving the
+// bottom rows for the commit affordance when it is shown.
+func (m *Model) listHeight() int {
+	h := m.totalHeight
+	if m.commitBarVisible() {
+		h -= commitBarLines
+	}
+	return h
+}
+
+// renderCommitBar renders the commit affordance pinned to the bottom of the file
+// list: a separator rule then a label (staged count) with the ⇧C keycap
+// right-aligned. The label brightens when there is something staged to commit.
+func (m *Model) renderCommitBar() string {
+	w := m.listWidth
+	if w < 1 {
+		return ""
+	}
+	rule := styles.Divider.Render(truncCells(strings.Repeat("─", w), w))
+
+	staged := m.StagedCount()
+	keycap := "⇧C"
+	var labelText, label string
+	if staged > 0 {
+		labelText = fmt.Sprintf("Commit %d staged", staged)
+		label = styles.GroupStaged.Render(labelText)
+	} else {
+		labelText = "Commit"
+		label = styles.Folder.Render(labelText)
+	}
+
+	gap := w - ansi.StringWidth(labelText) - ansi.StringWidth(keycap)
+	if gap < 1 {
+		// Too narrow for the keycap: show just the (possibly truncated) label.
+		return rule + "\n" + truncCells(label, w)
+	}
+	line := label + strings.Repeat(" ", gap) + styles.Key.Render(keycap)
+	return rule + "\n" + line
 }
 
 // renderCleanState renders the friendly "working tree clean" empty state.
@@ -1029,7 +1104,7 @@ type listCell struct {
 
 func (m *Model) renderList() string {
 	cells := m.listCells()
-	h := m.totalHeight
+	h := m.listHeight()
 	start := m.listOffset
 	if h < 1 {
 		h = len(cells)
@@ -1264,7 +1339,7 @@ func (m *Model) cursorCellRange() (first, last, total int) {
 // the visible list window (the file pane scrolls to follow the selection). When
 // the selected row is taller than the pane it pins to the row's first line.
 func (m *Model) ensureSelectedVisible() {
-	h := m.totalHeight
+	h := m.listHeight()
 	if h < 1 {
 		return
 	}
