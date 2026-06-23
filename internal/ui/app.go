@@ -185,14 +185,29 @@ type confirmState struct {
 }
 
 // commitState is the modal commit-message dialog: a single-line text input plus
-// the staged-file count shown for context. enter commits, esc cancels.
+// the staged-file count shown for context. enter commits, ctrl+a toggles amend,
+// esc cancels.
 type commitState struct {
-	input  textinput.Model
-	staged int
+	input    textinput.Model
+	staged   int
+	amend    bool   // when true, enter runs `git commit --amend`
+	canAmend bool   // a previous commit exists (set after lastCommitMsg arrives)
+	lastMsg  string // the previous commit's message, used to prefill on amend
+	note     string // inline validation hint (e.g. "nothing staged")
 }
 
 // commitDoneMsg is emitted after a commit attempt completes.
-type commitDoneMsg struct{ err error }
+type commitDoneMsg struct {
+	err   error
+	amend bool
+}
+
+// lastCommitMsg carries the previous commit's message (and whether one exists)
+// back to an open commit dialog so it can offer/prefill an amend.
+type lastCommitMsg struct {
+	message string
+	ok      bool
+}
 
 // pushDoneMsg is emitted after a push attempt completes.
 type pushDoneMsg struct{ err error }
@@ -584,10 +599,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.toast = msg.err.Error()
 			return a, nil
 		}
-		a.toast = "committed"
+		if msg.amend {
+			a.toast = "amended"
+		} else {
+			a.toast = "committed"
+		}
 		// Force the selected file's diff to reload — its staged content is gone.
 		a.forceDiffReload = true
 		return a, a.loadStatusCmd()
+
+	case lastCommitMsg:
+		// The async last-commit fetch resolved; let an open dialog offer amend.
+		if a.commit != nil {
+			a.commit.lastMsg = msg.message
+			a.commit.canAmend = msg.ok
+		}
+		return a, nil
 
 	case pushDoneMsg:
 		if msg.err != nil {
