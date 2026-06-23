@@ -824,6 +824,19 @@ func TestWheelOutsideBodyIgnored(t *testing.T) {
 	}
 }
 
+// TestBlameOverlaySwallowsMouse asserts an open blame popup is modal to the
+// mouse: a wheel event that would otherwise move the file selection is ignored
+// while the popup is open (consistent with the confirm/commit overlays).
+func TestBlameOverlaySwallowsMouse(t *testing.T) {
+	a := newTestApp()
+	before := a.diff.SelectedPath()
+	a.blame = &blameState{note: "no blame — line was removed"}
+	_, _ = a.handleMouse(tea.MouseMsg{X: 2, Y: 2, Button: tea.MouseButtonWheelDown})
+	if a.diff.SelectedPath() != before {
+		t.Fatalf("blame popup should swallow mouse; selection moved %q->%q", before, a.diff.SelectedPath())
+	}
+}
+
 // TestHoverHighlightsRowUnderPointer asserts mouse motion over a file row sets
 // the hover row, and motion outside the list clears it — without changing the
 // selection.

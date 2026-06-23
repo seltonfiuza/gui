@@ -795,7 +795,7 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		a.dragging = false
 		return a, nil
 	}
-	if a.confirm != nil || a.commit != nil {
+	if a.confirm != nil || a.commit != nil || a.blame != nil {
 		return a, nil
 	}
 	// In the PR overlay, the wheel scrolls the description pane when the pointer is
