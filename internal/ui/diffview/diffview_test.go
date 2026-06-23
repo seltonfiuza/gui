@@ -387,6 +387,45 @@ func TestCollapseHidesChildrenAndToggles(t *testing.T) {
 	}
 }
 
+func TestSourceLineAtCursor(t *testing.T) {
+	// A diff: header (4 lines, idx 0-3), @@ at idx 4, body idx 5-9.
+	raw := "diff --git a/f b/f\n" + // 0
+		"index 111..222 100644\n" + // 1
+		"--- a/f\n" + // 2
+		"+++ b/f\n" + // 3
+		"@@ -10,3 +10,4 @@\n" + // 4  NewStart = 10
+		" ctx0\n" + // 5  -> new line 10
+		"-removed\n" + // 6  -> removed
+		"+added1\n" + // 7  -> new line 11
+		"+added2\n" + // 8  -> new line 12
+		" ctx1\n" // 9  -> new line 13
+
+	m := New()
+	m.SetDiff("f", raw)
+
+	cases := []struct {
+		cursor   int
+		wantLine int
+		removed  bool
+		ok       bool
+	}{
+		{4, 0, false, false}, // on the @@ header
+		{5, 10, false, true}, // context -> 10
+		{6, 0, true, false},  // removed line
+		{7, 11, false, true}, // first added -> 11
+		{8, 12, false, true}, // second added -> 12
+		{9, 13, false, true}, // trailing context -> 13
+	}
+	for _, c := range cases {
+		m.lineCursor = c.cursor
+		line, removed, ok := m.SourceLineAtCursor()
+		if ok != c.ok || removed != c.removed || (ok && line != c.wantLine) {
+			t.Errorf("cursor %d: got (line=%d removed=%v ok=%v), want (line=%d removed=%v ok=%v)",
+				c.cursor, line, removed, ok, c.wantLine, c.removed, c.ok)
+		}
+	}
+}
+
 // TestFlatModeShowsFullPaths asserts flat mode emits one file node per file with
 // the full path and no folder nodes.
 func TestFlatModeShowsFullPaths(t *testing.T) {

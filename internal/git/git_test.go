@@ -850,3 +850,61 @@ func TestRebaseInProgress(t *testing.T) {
 		t.Errorf("no rebase should be in progress on a clean repo")
 	}
 }
+
+func TestParseBlamePorcelain(t *testing.T) {
+	out := "9fceb02d0ae598e95dc970b74767f19372d61af8 12 12 1\n" +
+		"author Jane Doe\n" +
+		"author-mail <jane@example.com>\n" +
+		"author-time 1700000000\n" +
+		"author-tz +0000\n" +
+		"committer Jane Doe\n" +
+		"summary Add the thing\n" +
+		"filename keep.txt\n" +
+		"\tsome line of code\n"
+	e := parseBlamePorcelain(out)
+	if e.CommitHash != "9fceb02" {
+		t.Errorf("CommitHash = %q, want short 9fceb02", e.CommitHash)
+	}
+	if e.Author != "Jane Doe" {
+		t.Errorf("Author = %q", e.Author)
+	}
+	if e.Summary != "Add the thing" {
+		t.Errorf("Summary = %q", e.Summary)
+	}
+	if e.NotCommitted {
+		t.Errorf("NotCommitted = true, want false")
+	}
+	if e.AuthorTime.Unix() != 1700000000 {
+		t.Errorf("AuthorTime = %v", e.AuthorTime)
+	}
+}
+
+func TestParseBlamePorcelainNotCommitted(t *testing.T) {
+	out := "0000000000000000000000000000000000000000 1 1 1\n" +
+		"author Not Committed Yet\n" +
+		"author-time 1700000000\n" +
+		"summary Version of ... not committed\n" +
+		"\tnew line\n"
+	e := parseBlamePorcelain(out)
+	if !e.NotCommitted {
+		t.Fatalf("NotCommitted = false, want true for zero hash")
+	}
+}
+
+func TestBlameLine(t *testing.T) {
+	dir := newRepo(t) // commits keep.txt = "original\n" as "initial"
+	svc, _ := Open(dir)
+	e, err := svc.BlameLine("keep.txt", 1)
+	if err != nil {
+		t.Fatalf("BlameLine: %v", err)
+	}
+	if e.NotCommitted {
+		t.Fatalf("committed line reported NotCommitted")
+	}
+	if e.Author != "test" {
+		t.Errorf("Author = %q, want test", e.Author)
+	}
+	if e.Summary != "initial" {
+		t.Errorf("Summary = %q, want initial", e.Summary)
+	}
+}

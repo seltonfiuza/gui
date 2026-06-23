@@ -134,6 +134,9 @@ type App struct {
 	// commit is the active commit-message dialog, or nil when closed.
 	commit *commitState
 
+	// blame is the active git-blame popup, or nil when closed.
+	blame *blameState
+
 	// undo is a LIFO stack of discarded changes that ctrl+r can recover. Capped
 	// at undoStackCap; oldest entries are dropped when the cap is exceeded.
 	undo []undoEntry
@@ -195,6 +198,22 @@ type commitState struct {
 	canAmend bool   // a previous commit exists (set after lastCommitMsg arrives)
 	lastMsg  string // the previous commit's message, used to prefill on amend
 	note     string // inline validation hint (e.g. "nothing staged")
+}
+
+// blameState is the modal git-blame popup for the diff line under the cursor.
+// While loading is true the git call is in flight; note is non-empty for the
+// removed/no-blame/error states (no commit info to show).
+type blameState struct {
+	line    int
+	loading bool
+	entry   git.BlameEntry
+	note    string
+}
+
+// blameMsg carries the result of an async BlameLine call.
+type blameMsg struct {
+	entry git.BlameEntry
+	err   error
 }
 
 // commitDoneMsg is emitted after a commit attempt completes.
@@ -408,6 +427,9 @@ func (a *App) overlayActive() bool {
 	if a.commit != nil {
 		return true
 	}
+	if a.blame != nil {
+		return true
+	}
 	if a.active == viewHelp {
 		return true
 	}
@@ -543,6 +565,15 @@ func (a *App) loadDiffCmd(path string, staged bool) tea.Cmd {
 	}
 }
 
+// loadBlameCmd fetches blame for a single 1-based line off the UI thread.
+func (a *App) loadBlameCmd(path string, line int) tea.Cmd {
+	repo := a.repo
+	return func() tea.Msg {
+		entry, err := repo.BlameLine(path, line)
+		return blameMsg{entry: entry, err: err}
+	}
+}
+
 // quitCheckCmd probes for an in-progress rebase off the UI goroutine so the
 // quit handler can warn before exiting mid-operation.
 func (a *App) quitCheckCmd() tea.Cmd {
@@ -642,6 +673,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toast = fmt.Sprintf("created #%d", msg.pr.Number)
 		a.pr.BackToList()
 		return a, a.loadPRsCmd()
+
+	case blameMsg:
+		if a.blame == nil {
+			return a, nil
+		}
+		a.blame.loading = false
+		if msg.err != nil {
+			a.blame.note = "blame failed: " + msg.err.Error()
+			return a, nil
+		}
+		a.blame.entry = msg.entry
+		return a, nil
 
 	case diffMsg:
 		if msg.err != nil {
@@ -752,8 +795,22 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		a.dragging = false
 		return a, nil
 	}
-	// While an overlay is open, ignore mouse input entirely.
-	if a.active != viewDiff || a.confirm != nil || a.commit != nil {
+	if a.confirm != nil || a.commit != nil || a.blame != nil {
+		return a, nil
+	}
+	// In the PR overlay, the wheel scrolls the description pane when the pointer is
+	// over it. headerHeight is 1 (see currentLayout), so subtract it to convert to
+	// PR-view-local coordinates. All other PR-view mouse input is ignored.
+	if a.active == viewPR {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			a.pr.ScrollDescriptionAt(msg.X, msg.Y-1, -3)
+		case tea.MouseButtonWheelDown:
+			a.pr.ScrollDescriptionAt(msg.X, msg.Y-1, 3)
+		}
+		return a, nil
+	}
+	if a.active != viewDiff {
 		return a, nil
 	}
 
@@ -890,6 +947,15 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case "n", "N", "esc":
 			a.confirm = nil
+		}
+		return a, nil
+	}
+
+	// Blame popup captures esc/b/q to close.
+	if a.blame != nil {
+		switch key {
+		case "esc", "b", "q", "enter":
+			a.blame = nil
 		}
 		return a, nil
 	}
@@ -1127,6 +1193,27 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 	case config.ActHunkPrev:
 		a.diff.HunkPrev()
 		return a, nil
+	case config.ActBlameLine:
+		if a.diff.Focus() != diffview.FocusDiff {
+			a.toast = "blame: focus the diff first"
+			return a, nil
+		}
+		path := a.diff.DiffPath()
+		if path == "" {
+			a.toast = "blame: no file selected"
+			return a, nil
+		}
+		line, removed, ok := a.diff.SourceLineAtCursor()
+		if removed {
+			a.blame = &blameState{note: "no blame — line was removed"}
+			return a, nil
+		}
+		if !ok {
+			a.blame = &blameState{note: "no blame for this line"}
+			return a, nil
+		}
+		a.blame = &blameState{line: line, loading: true}
+		return a, a.loadBlameCmd(path, line)
 	case config.ActPaneGrow:
 		a.growDiff()
 		return a, nil
@@ -1452,6 +1539,8 @@ func (a *App) View() string {
 
 	var body string
 	switch {
+	case a.blame != nil:
+		body = a.renderBlameOverlay(a.width, a.bodyHeight())
 	case a.commit != nil:
 		body = a.renderCommitOverlay(a.width, a.bodyHeight())
 	case a.confirm != nil:
@@ -1609,6 +1698,53 @@ func (a *App) renderConfirmOverlay(width, height int) string {
 	hint := styles.Desc.Render("y confirm · n cancel · esc")
 	box := styles.Confirm.Render(lipgloss.JoinVertical(lipgloss.Left, title, "", prompt, "", hint))
 	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
+}
+
+// renderBlameOverlay renders the git-blame popup as a centered modal.
+func (a *App) renderBlameOverlay(width, height int) string {
+	var content string
+	switch {
+	case a.blame.note != "":
+		content = styles.Inline.Render(a.blame.note)
+	case a.blame.loading:
+		content = styles.Desc.Render("loading blame…")
+	case a.blame.entry.NotCommitted:
+		content = styles.Inline.Render("Not Committed Yet")
+	default:
+		e := a.blame.entry
+		when := e.AuthorTime.Format("2006-01-02 15:04")
+		head := fmt.Sprintf("%s  %s  %s (%s)", e.CommitHash, e.Author, humanizeSince(e.AuthorTime), when)
+		content = lipgloss.JoinVertical(lipgloss.Left,
+			styles.OverlayTitle.Render(head),
+			styles.Desc.Render(e.Summary),
+		)
+	}
+	box := styles.Overlay.Render(content)
+	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
+}
+
+// humanizeSince renders a coarse relative age like "3 weeks ago".
+func humanizeSince(t time.Time) string {
+	if t.IsZero() {
+		return "unknown"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d minutes ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d hours ago", int(d.Hours()))
+	case d < 14*24*time.Hour:
+		return fmt.Sprintf("%d days ago", int(d.Hours()/24))
+	case d < 60*24*time.Hour:
+		return fmt.Sprintf("%d weeks ago", int(d.Hours()/24/7))
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%d months ago", int(d.Hours()/24/30))
+	default:
+		return fmt.Sprintf("%d years ago", int(d.Hours()/24/365))
+	}
 }
 
 // fitWidth truncates s (ANSI-aware) to at most w display columns, appending an

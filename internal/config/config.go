@@ -57,6 +57,8 @@ const (
 	ActPush       // p: push the current branch to its upstream (git push)
 	// Appended for the command palette. Keep at the end.
 	ActCommandPalette // ctrl+p: open the fuzzy command palette (search all commands)
+	// Appended for git blame. Keep at the end.
+	ActBlameLine // b: show git blame for the line under the diff cursor
 )
 
 // actionNames maps each Action to its stable config name (used in config.yaml
@@ -95,6 +97,7 @@ var actionNames = map[Action]string{
 	ActUnstageAll:        "unstage_all",
 	ActPush:              "push",
 	ActCommandPalette:    "command_palette",
+	ActBlameLine:         "blame_line",
 }
 
 // actionByName is the reverse of actionNames, built once at package load via an IIFE.
@@ -155,6 +158,7 @@ func DefaultKeymap() Keymap {
 			"T":      ActThemePicker,
 			"P":      ActPRList,
 			"p":      ActPush,
+			"b":      ActBlameLine,
 			"ctrl+p": ActCommandPalette,
 			"esc":    ActCancel,
 		},
@@ -181,6 +185,7 @@ var bindingOrder = []struct {
 	{ActRecover, "Recover the last discarded change"},
 	{ActHunkNext, "Next hunk"},
 	{ActHunkPrev, "Previous hunk"},
+	{ActBlameLine, "Blame the line under the cursor"},
 	{ActCollapse, "Collapse folder / go to parent"},
 	{ActExpand, "Expand folder / step in"},
 	{ActToggleTree, "Toggle folder tree / flat list"},

@@ -1,9 +1,12 @@
 package prlist
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/seltonfiuza/gui/internal/github"
 )
@@ -57,5 +60,76 @@ func TestCreateEscCancels(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.mode != modeList {
 		t.Fatalf("after esc mode = %v, want modeList", m.mode)
+	}
+}
+
+func TestScrollDescriptionAt(t *testing.T) {
+	m := New()
+	m.Open("Pull Requests")
+	body := ""
+	for i := 0; i < 100; i++ {
+		body += fmt.Sprintf("line %d\n\n", i)
+	}
+	m.SetDetail(github.PR{Number: 1, Title: "t", Body: body}, "")
+	m.mode = modeDetail
+	_ = m.View(120, 40) // sizes the viewport and records the desc rect
+
+	// A point inside the description rect scrolls; outside does not.
+	inX, inY := m.descRectX+1, m.descRectY+1
+	if !m.ScrollDescriptionAt(inX, inY, 3) {
+		t.Fatalf("expected scroll inside desc rect")
+	}
+	if m.descVP.YOffset != 3 {
+		t.Fatalf("YOffset = %d, want 3", m.descVP.YOffset)
+	}
+	if m.ScrollDescriptionAt(m.descRectX+m.descRectW+5, inY, 3) {
+		t.Fatalf("did not expect scroll outside desc rect")
+	}
+}
+
+func TestDescriptionRendersMarkdown(t *testing.T) {
+	m := New()
+	m.Open("Pull Requests")
+	m.SetDetail(github.PR{Number: 1, Title: "t", Body: "# Heading\n\nSome body text."}, "")
+	m.mode = modeDetail
+	raw := m.View(120, 40)
+	// Glamour styling must survive into the rendered pane (guards against a
+	// regression that strips ANSI in production).
+	if !strings.Contains(raw, "\x1b[") {
+		t.Fatalf("expected ANSI styling in rendered description:\n%q", raw)
+	}
+	// Strip ANSI so substring checks aren't broken by glamour's per-span colour
+	// codes (which can split words like "body text" across escape sequences).
+	out := ansi.Strip(raw)
+	// The heading text survives markdown rendering (styling aside).
+	if !strings.Contains(out, "Heading") || !strings.Contains(out, "body text") {
+		t.Fatalf("description did not render markdown content:\n%s", out)
+	}
+	// The literal '#' markdown marker should be gone in the rendered heading.
+	if strings.Contains(out, "# Heading") {
+		t.Fatalf("expected markdown '#' to be rendered away:\n%s", out)
+	}
+}
+
+func TestDescriptionViewportScrolls(t *testing.T) {
+	m := New()
+	m.Open("Pull Requests")
+	body := ""
+	for i := 0; i < 100; i++ {
+		body += fmt.Sprintf("line %d\n\n", i)
+	}
+	m.SetDetail(github.PR{Number: 1, Title: "t", Body: body}, "")
+	m.mode = modeDetail
+	m.focus = focusDesc
+	// Render once so the viewport gets sized + content.
+	_ = m.View(120, 40)
+	if got := m.descVP.YOffset; got != 0 {
+		t.Fatalf("initial YOffset = %d, want 0", got)
+	}
+	// A 'j' keypress while the description is focused scrolls it down.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	_ = m.View(120, 40)
+	if got := m.descVP.YOffset; got != 1 {
+		t.Fatalf("after j YOffset = %d, want 1", got)
 	}
 }
