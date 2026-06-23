@@ -20,9 +20,11 @@ import (
 
 	"github.com/seltonfiuza/gui/internal/config"
 	"github.com/seltonfiuza/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/github"
 	"github.com/seltonfiuza/gui/internal/ui/branchpanel"
 	"github.com/seltonfiuza/gui/internal/ui/diffview"
 	"github.com/seltonfiuza/gui/internal/ui/help"
+	"github.com/seltonfiuza/gui/internal/ui/prlist"
 	"github.com/seltonfiuza/gui/internal/ui/styles"
 	"github.com/seltonfiuza/gui/internal/ui/themepicker"
 )
@@ -35,6 +37,7 @@ const (
 	viewBranch
 	viewHelp
 	viewTheme
+	viewPR
 )
 
 // ---- messages returned by git commands ----
@@ -47,6 +50,17 @@ type statusMsg struct {
 type remoteMsg struct {
 	remote *git.Remote
 	err    error
+}
+
+type prsMsg struct {
+	prs []github.PR
+	err error
+}
+
+type prDetailMsg struct {
+	pr   github.PR
+	diff string
+	err  error
 }
 
 type diffMsg struct {
@@ -105,6 +119,7 @@ type App struct {
 	branch branchpanel.Model
 	help   help.Model
 	theme  themepicker.Model
+	pr     prlist.Model
 
 	// dragging is true while the user holds the mouse on the divider to resize.
 	dragging bool
@@ -194,6 +209,7 @@ func New(repo *git.Service, version string) tea.Model {
 		branch:      branchpanel.New(),
 		help:        help.New(),
 		theme:       themepicker.New(),
+		pr:          prlist.New(),
 		listWidth:   defaultListWidth,
 		autoRefresh: true,
 		version:     version,
@@ -370,6 +386,9 @@ func (a *App) overlayActive() bool {
 	if a.active == viewTheme {
 		return true
 	}
+	if a.active == viewPR {
+		return true
+	}
 	return false
 }
 
@@ -379,6 +398,51 @@ func (a *App) loadRemoteCmd() tea.Cmd {
 		r, err := repo.OriginRemote()
 		return remoteMsg{remote: r, err: err}
 	}
+}
+
+// loadPRsCmd fetches the open pull/merge requests for the origin remote off the
+// UI goroutine via internal/github (gh for GitHub, glab for GitLab).
+func (a *App) loadPRsCmd() tea.Cmd {
+	remote := a.remote
+	return func() tea.Msg {
+		if remote == nil {
+			return prsMsg{err: errors.New("no origin remote configured")}
+		}
+		svc := github.New(github.HostForRemote(remote))
+		prs, err := svc.ListPRs(remote)
+		return prsMsg{prs: prs, err: err}
+	}
+}
+
+// loadPRDetailCmd fetches a single request's message + pipeline status (ViewPR)
+// and its diff (PRDiff) off the UI goroutine. A diff-fetch failure still shows
+// the request, with the error in place of the diff.
+func (a *App) loadPRDetailCmd(number int) tea.Cmd {
+	remote := a.remote
+	return func() tea.Msg {
+		if remote == nil {
+			return prDetailMsg{err: errors.New("no origin remote configured")}
+		}
+		svc := github.New(github.HostForRemote(remote))
+		pr, err := svc.ViewPR(remote, number)
+		if err != nil {
+			return prDetailMsg{err: err}
+		}
+		diff, derr := svc.PRDiff(remote, number)
+		if derr != nil {
+			return prDetailMsg{pr: pr, diff: "diff unavailable: " + derr.Error()}
+		}
+		return prDetailMsg{pr: pr, diff: diff}
+	}
+}
+
+// prTitle labels the request overlay per the origin host: GitLab uses "Merge
+// Requests", everything else "Pull Requests".
+func (a *App) prTitle() string {
+	if a.remote != nil && strings.Contains(a.remote.Host, "gitlab") {
+		return "Merge Requests"
+	}
+	return "Pull Requests"
 }
 
 func (a *App) loadDiffCmd(path string, staged bool) tea.Cmd {
@@ -455,6 +519,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.remote = msg.remote
+		return a, nil
+
+	case prsMsg:
+		if msg.err != nil {
+			a.pr.SetError(msg.err.Error())
+			return a, nil
+		}
+		a.pr.SetPRs(msg.prs)
+		return a, nil
+
+	case prDetailMsg:
+		if msg.err != nil {
+			a.pr.SetDetailError(msg.err.Error())
+			return a, nil
+		}
+		a.pr.SetDetail(msg.pr, msg.diff)
 		return a, nil
 
 	case diffMsg:
@@ -697,6 +777,8 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleBranchKey(msg)
 	case viewTheme:
 		return a.handleThemeKey(msg)
+	case viewPR:
+		return a.handlePRKey(msg)
 	}
 
 	// viewDiff: route through the dispatcher.
@@ -718,6 +800,20 @@ func (a *App) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.active = viewDiff
 	}
 	return a, cmd
+}
+
+// handlePRKey routes a key to the request overlay. The panel reports an Intent:
+// close returns to the diff view; open-detail fetches the selected request.
+func (a *App) handlePRKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	intent := a.pr.Update(msg)
+	switch intent.Kind {
+	case prlist.IntentClose:
+		a.active = viewDiff
+		return a, nil
+	case prlist.IntentOpenDetail:
+		return a, a.loadPRDetailCmd(intent.Number)
+	}
+	return a, nil
 }
 
 // normalizeKey maps Bubble Tea's key strings onto the names the config keymap
@@ -747,6 +843,10 @@ func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.active = viewTheme
 		a.theme.Open()
 		return a, nil
+	case config.ActPRList:
+		a.active = viewPR
+		a.pr.Open(a.prTitle())
+		return a, a.loadPRsCmd()
 	case config.ActToggleRawDiff:
 		a.diff.ToggleRawDiff()
 		if a.diff.RawMode() {
@@ -1106,6 +1206,8 @@ func (a *App) View() string {
 		body = a.branch.View(a.width, a.bodyHeight())
 	case a.active == viewTheme:
 		body = a.theme.View(a.width, a.bodyHeight())
+	case a.active == viewPR:
+		body = a.pr.View(a.width, a.bodyHeight())
 	default:
 		body = a.diff.View()
 	}

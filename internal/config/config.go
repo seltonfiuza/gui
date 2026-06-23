@@ -95,6 +95,7 @@ func DefaultKeymap() Keymap {
 		chords: map[string]Action{
 			"b": ActBranchPanel,
 			"t": ActThemePicker,
+			"p": ActPRList,
 		},
 	}
 }
@@ -125,6 +126,7 @@ func (k Keymap) Bindings() []Binding {
 		{Keys: []string{"ctrl+g"}, Action: ActToggleRawDiff, Desc: "Toggle raw / cleaned diff view"},
 		{Keys: []string{"<leader> b"}, Action: ActBranchPanel, Desc: "Open branch panel"},
 		{Keys: []string{"<leader> t"}, Action: ActThemePicker, Desc: "Open theme picker (live preview)"},
+		{Keys: []string{"<leader> p"}, Action: ActPRList, Desc: "Open merge/pull request list"},
 		{Keys: []string{"?"}, Action: ActHelp, Desc: "Toggle help overlay"},
 		{Keys: []string{"esc"}, Action: ActCancel, Desc: "Cancel / close overlay"},
 		{Keys: []string{"q", "ctrl+c"}, Action: ActQuit, Desc: "Quit"},
