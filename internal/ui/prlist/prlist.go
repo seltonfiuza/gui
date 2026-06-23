@@ -10,9 +10,10 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
@@ -86,12 +87,15 @@ type Model struct {
 	detailLoading bool
 	detailErr     string
 	focus         detailFocus
-	diffLines     []string // colorized diff lines
-	detailScroll  int      // first visible diff line
-	detailDiffH   int      // visible diff rows at last render (for paging)
-	descScroll    int      // first visible description line
-	descH         int      // visible description rows at last render
-	descTotal     int      // total wrapped description lines at last render
+	diffLines     []string       // colorized diff lines
+	detailScroll  int            // first visible diff line
+	detailDiffH   int            // visible diff rows at last render (for paging)
+	descVP        viewport.Model // scrollable description pane
+	descH         int            // visible description rows at last render (for descTitle)
+	descTotal     int            // total content lines at last render (for descTitle)
+	// description pane screen rect (PR-view-local coords), set during viewDetail,
+	// used for mouse-wheel hit-testing.
+	descRectX, descRectY, descRectW, descRectH int
 
 	// create form state
 	titleInput  textinput.Model
@@ -106,7 +110,9 @@ type Model struct {
 }
 
 // New builds an empty request panel.
-func New() Model { return Model{title: "Pull Requests"} }
+func New() Model {
+	return Model{title: "Pull Requests", descVP: viewport.New(0, 0)}
+}
 
 // Open resets the panel into its loading state with the given title (e.g.
 // "Merge Requests" for GitLab, "Pull Requests" for GitHub).
@@ -146,7 +152,7 @@ func (m *Model) SetDetail(pr github.PR, diff string) {
 	m.detailErr = ""
 	m.focus = focusDiff
 	m.detailScroll = 0
-	m.descScroll = 0
+	m.descVP.GotoTop()
 	m.diffLines = buildDiffLines(diff)
 }
 
@@ -238,7 +244,7 @@ func (m *Model) updateList(msg tea.KeyMsg) Intent {
 			m.detailErr = ""
 			m.focus = focusDiff
 			m.detailScroll = 0
-			m.descScroll = 0
+			m.descVP.GotoTop()
 			m.diffLines = nil
 			return Intent{Kind: IntentOpenDetail, Number: pr.Number}
 		}
@@ -327,8 +333,14 @@ func (m *Model) updateDetail(msg tea.KeyMsg) Intent {
 	}
 	// Scroll keys act on the focused pane.
 	if m.focus == focusDesc {
-		m.descScroll += scrollDelta(msg.String(), m.descH)
-		m.clampDesc()
+		switch msg.String() {
+		case "home", "g":
+			m.descVP.GotoTop()
+		case "end", "G":
+			m.descVP.GotoBottom()
+		default:
+			m.descVP, _ = m.descVP.Update(msg)
+		}
 	} else {
 		m.detailScroll += scrollDelta(msg.String(), m.detailDiffH)
 		m.clampScroll()
@@ -360,11 +372,6 @@ func scrollDelta(key string, viewH int) int {
 // viewport height.
 func (m *Model) clampScroll() {
 	m.detailScroll = clampScroll(m.detailScroll, len(m.diffLines), m.detailDiffH)
-}
-
-// clampDesc keeps the description scroll offset within range.
-func (m *Model) clampDesc() {
-	m.descScroll = clampScroll(m.descScroll, m.descTotal, m.descH)
 }
 
 // clampScroll bounds offset to [0, total-viewH].
@@ -522,16 +529,24 @@ func (m *Model) viewDetail(width, height int) string {
 		[]string{styles.Desc.Render(meta)},
 		width, titleH, false)
 
-	// Description pane: wrapped message body, scrollable.
-	descLines := m.descriptionLines(lw - 4)
-	m.descTotal = len(descLines)
+	// Description pane: markdown/text body rendered into a scrollable viewport.
+	innerW := lw - 4 // border (2) + padding (2)
+	if innerW < 1 {
+		innerW = 1
+	}
 	m.descH = descH - 3 // pane chrome (border 2) + pane title 1
 	if m.descH < 1 {
 		m.descH = 1
 	}
-	m.clampDesc()
-	descPane := renderPane(m.descTitle(), windowSlice(descLines, m.descScroll, m.descH),
-		lw, descH, m.focus == focusDesc)
+	content := m.descriptionContent(innerW)
+	m.descTotal = len(strings.Split(content, "\n"))
+	m.descVP.Width = innerW
+	m.descVP.Height = m.descH
+	m.descVP.SetContent(content)
+	// Record the pane rect (PR-view-local) for mouse-wheel hit-testing.
+	m.descRectX, m.descRectY, m.descRectW, m.descRectH = 0, titleH, lw, descH
+	visible := strings.Split(m.descVP.View(), "\n")
+	descPane := renderPane(m.descTitle(), visible, lw, descH, m.focus == focusDesc)
 
 	// Pipeline pane: colorized status.
 	status := m.detail.ChecksSummary
@@ -572,24 +587,25 @@ func (m *Model) descTitle() string {
 	if m.descTotal <= m.descH || m.descTotal == 0 {
 		return "Description"
 	}
-	end := m.descScroll + m.descH
+	start := m.descVP.YOffset
+	end := start + m.descH
 	if end > m.descTotal {
 		end = m.descTotal
 	}
-	return fmt.Sprintf("Description  (%d-%d/%d)", m.descScroll+1, end, m.descTotal)
+	return fmt.Sprintf("Description  (%d-%d/%d)", start+1, end, m.descTotal)
 }
 
-// descriptionLines wraps the request body to width w.
-func (m *Model) descriptionLines(w int) []string {
+// descriptionContent returns the description body rendered to width w as a
+// single string for the viewport. Task 5 replaces the body with markdown.
+func (m *Model) descriptionContent(w int) string {
 	body := strings.TrimSpace(m.detail.Body)
 	if body == "" {
-		return []string{styles.Desc.Render("(no description)")}
+		return styles.Desc.Render("(no description)")
 	}
 	if w < 1 {
 		w = 1
 	}
-	wrapped := lipgloss.NewStyle().Width(w).Render(body)
-	return strings.Split(wrapped, "\n")
+	return lipgloss.NewStyle().Width(w).Render(body)
 }
 
 // centered renders content in a single overlay box, centered in the area (used

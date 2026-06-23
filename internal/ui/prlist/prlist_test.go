@@ -1,6 +1,7 @@
 package prlist
 
 import (
+	"fmt"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,5 +58,28 @@ func TestCreateEscCancels(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.mode != modeList {
 		t.Fatalf("after esc mode = %v, want modeList", m.mode)
+	}
+}
+
+func TestDescriptionViewportScrolls(t *testing.T) {
+	m := New()
+	m.Open("Pull Requests")
+	body := ""
+	for i := 0; i < 100; i++ {
+		body += fmt.Sprintf("line %d\n", i)
+	}
+	m.SetDetail(github.PR{Number: 1, Title: "t", Body: body}, "")
+	m.mode = modeDetail
+	m.focus = focusDesc
+	// Render once so the viewport gets sized + content.
+	_ = m.View(120, 40)
+	if got := m.descVP.YOffset; got != 0 {
+		t.Fatalf("initial YOffset = %d, want 0", got)
+	}
+	// A 'j' keypress while the description is focused scrolls it down.
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	_ = m.View(120, 40)
+	if got := m.descVP.YOffset; got != 1 {
+		t.Fatalf("after j YOffset = %d, want 1", got)
 	}
 }
