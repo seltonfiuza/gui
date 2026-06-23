@@ -113,7 +113,94 @@ func (s *Service) PRDiff(repo *git.Remote, number int) (string, error) {
 	return runCLI("gh", "pr", "diff", strconv.Itoa(number), "-R", prRepoArg(repo))
 }
 
-func (s *Service) CreatePR(repo *git.Remote, o CreatePROpts) (PR, error) { panic("not implemented") }
+// CreatePR opens a new pull/merge request for repo and returns its number/URL.
+// GitHub uses `gh pr create`; GitLab uses `glab mr create`. The branch must
+// already exist on the remote (the UI pushes it first).
+func (s *Service) CreatePR(repo *git.Remote, o CreatePROpts) (PR, error) {
+	if repo == nil || repo.Owner == "" || repo.Repo == "" {
+		return PR{}, errors.New("no origin remote configured")
+	}
+	var out string
+	var err error
+	if isGitLab(repo.Host) {
+		out, err = runCLI("glab", glabCreateArgs(repo, o)...)
+	} else {
+		out, err = runCLI("gh", ghCreateArgs(repo, o)...)
+	}
+	if err != nil {
+		return PR{}, err
+	}
+	url := lastNonEmptyLine(out)
+	return PR{
+		Number:  prNumberFromURL(url),
+		Title:   o.Title,
+		URL:     url,
+		HeadRef: o.Head,
+		BaseRef: o.Base,
+		Draft:   o.Draft,
+	}, nil
+}
+
+// ghCreateArgs builds the `gh pr create` argument list.
+func ghCreateArgs(repo *git.Remote, o CreatePROpts) []string {
+	args := []string{
+		"pr", "create",
+		"-R", prRepoArg(repo),
+		"--head", o.Head,
+		"--base", o.Base,
+		"--title", o.Title,
+		"--body", o.Body,
+	}
+	if o.Draft {
+		args = append(args, "--draft")
+	}
+	return args
+}
+
+// glabCreateArgs builds the `glab mr create` argument list. --yes skips the
+// interactive prompts so the call is non-interactive.
+func glabCreateArgs(repo *git.Remote, o CreatePROpts) []string {
+	args := []string{
+		"mr", "create",
+		"-R", prRepoArg(repo),
+		"--source-branch", o.Head,
+		"--target-branch", o.Base,
+		"--title", o.Title,
+		"--description", o.Body,
+		"--yes",
+	}
+	if o.Draft {
+		args = append(args, "--draft")
+	}
+	return args
+}
+
+// prNumberFromURL extracts the trailing integer from a PR/MR URL, e.g.
+// ".../pull/42" or ".../merge_requests/7". Returns 0 when not parseable.
+func prNumberFromURL(url string) int {
+	trimmed := strings.TrimRight(strings.TrimSpace(url), "/")
+	i := strings.LastIndex(trimmed, "/")
+	if i < 0 {
+		return 0
+	}
+	n, err := strconv.Atoi(trimmed[i+1:])
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// lastNonEmptyLine returns the last non-blank line of s (the create CLIs print
+// the new request URL last, possibly after warning lines).
+func lastNonEmptyLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return ""
+}
 
 // viewGitLabMR fetches a single merge request via `glab mr view`.
 func viewGitLabMR(repo *git.Remote, number int) (PR, error) {
