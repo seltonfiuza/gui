@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -162,41 +163,68 @@ func DefaultKeymap() Keymap {
 	}
 }
 
+// bindingOrder is the static display order and description for each action in
+// the help overlay / command palette. The actual keys are filled in from the
+// live keymap by Bindings(), so remapped keys show correctly.
+var bindingOrder = []struct {
+	Action Action
+	Desc   string
+}{
+	{ActDown, "Move down (by line within a diff)"},
+	{ActUp, "Move up (by line within a diff)"},
+	{ActConfirm, "Open / confirm"},
+	{ActStageToggle, "Stage / unstage selected file"},
+	{ActStageAll, "Stage all changed + untracked files"},
+	{ActUnstageAll, "Unstage all staged files"},
+	{ActUndo, "Discard the change under the cursor (hunk)"},
+	{ActUndoFile, "Discard the whole file (confirm)"},
+	{ActRecover, "Recover the last discarded change"},
+	{ActHunkNext, "Next hunk"},
+	{ActHunkPrev, "Previous hunk"},
+	{ActCollapse, "Collapse folder / go to parent"},
+	{ActExpand, "Expand folder / step in"},
+	{ActToggleTree, "Toggle folder tree / flat list"},
+	{ActFocusToggle, "Move focus: file tree ↔ diff contents"},
+	{ActHideTree, "Hide / show the file-tree pane"},
+	{ActCommit, "Commit staged changes (message dialog)"},
+	{ActPaneGrow, "Grow the diff pane"},
+	{ActPaneShrink, "Shrink the diff pane"},
+	{ActRefresh, "Refresh status"},
+	{ActToggleAutoRefresh, "Toggle auto-refresh on/off"},
+	{ActToggleRawDiff, "Toggle raw / cleaned diff view"},
+	{ActPush, "Push the current branch (git push)"},
+	{ActCommandPalette, "Open the command palette (fuzzy search)"},
+	{ActBranchPanel, "Open branch panel"},
+	{ActThemePicker, "Open theme picker (live preview)"},
+	{ActPRList, "Open merge/pull request list"},
+	{ActHelp, "Toggle help overlay"},
+	{ActCancel, "Cancel / close overlay"},
+	{ActQuit, "Quit"},
+}
+
 // Bindings returns the documented keybindings for the help overlay, in display
-// order.
+// order, with each binding's keys taken from this keymap (so custom configs are
+// reflected). Chords are rendered as "<leader> <key>".
 func (k Keymap) Bindings() []Binding {
-	return []Binding{
-		{Keys: []string{"j", "down"}, Action: ActDown, Desc: "Move down (by line within a diff)"},
-		{Keys: []string{"k", "up"}, Action: ActUp, Desc: "Move up (by line within a diff)"},
-		{Keys: []string{"enter"}, Action: ActConfirm, Desc: "Open / confirm"},
-		{Keys: []string{"s"}, Action: ActStageToggle, Desc: "Stage / unstage selected file"},
-		{Keys: []string{"a"}, Action: ActStageAll, Desc: "Stage all changed + untracked files"},
-		{Keys: []string{"A"}, Action: ActUnstageAll, Desc: "Unstage all staged files"},
-		{Keys: []string{"u"}, Action: ActUndo, Desc: "Discard the change under the cursor (hunk)"},
-		{Keys: []string{"U"}, Action: ActUndoFile, Desc: "Discard the whole file (confirm)"},
-		{Keys: []string{"ctrl+r"}, Action: ActRecover, Desc: "Recover the last discarded change"},
-		{Keys: []string{"}"}, Action: ActHunkNext, Desc: "Next hunk"},
-		{Keys: []string{"{"}, Action: ActHunkPrev, Desc: "Previous hunk"},
-		{Keys: []string{"h", "left"}, Action: ActCollapse, Desc: "Collapse folder / go to parent"},
-		{Keys: []string{"l", "right"}, Action: ActExpand, Desc: "Expand folder / step in"},
-		{Keys: []string{"."}, Action: ActToggleTree, Desc: "Toggle folder tree / flat list"},
-		{Keys: []string{"tab"}, Action: ActFocusToggle, Desc: "Move focus: file tree ↔ diff contents"},
-		{Keys: []string{"E"}, Action: ActHideTree, Desc: "Hide / show the file-tree pane"},
-		{Keys: []string{"C"}, Action: ActCommit, Desc: "Commit staged changes (message dialog)"},
-		{Keys: []string{">"}, Action: ActPaneGrow, Desc: "Grow the diff pane"},
-		{Keys: []string{"<"}, Action: ActPaneShrink, Desc: "Shrink the diff pane"},
-		{Keys: []string{"r"}, Action: ActRefresh, Desc: "Refresh status"},
-		{Keys: []string{"ctrl+t"}, Action: ActToggleAutoRefresh, Desc: "Toggle auto-refresh on/off"},
-		{Keys: []string{"ctrl+g"}, Action: ActToggleRawDiff, Desc: "Toggle raw / cleaned diff view"},
-		{Keys: []string{"p"}, Action: ActPush, Desc: "Push the current branch (git push)"},
-		{Keys: []string{"ctrl+p"}, Action: ActCommandPalette, Desc: "Open the command palette (fuzzy search)"},
-		{Keys: []string{"B"}, Action: ActBranchPanel, Desc: "Open branch panel"},
-		{Keys: []string{"T"}, Action: ActThemePicker, Desc: "Open theme picker (live preview)"},
-		{Keys: []string{"P"}, Action: ActPRList, Desc: "Open merge/pull request list"},
-		{Keys: []string{"?"}, Action: ActHelp, Desc: "Toggle help overlay"},
-		{Keys: []string{"esc"}, Action: ActCancel, Desc: "Cancel / close overlay"},
-		{Keys: []string{"q", "ctrl+c"}, Action: ActQuit, Desc: "Quit"},
+	byAction := map[Action][]string{}
+	for key, act := range k.direct {
+		byAction[act] = append(byAction[act], key)
 	}
+	for key, act := range k.chords {
+		disp := key
+		if k.Leader != "" {
+			disp = k.Leader + " " + key
+		}
+		byAction[act] = append(byAction[act], disp)
+	}
+	for act := range byAction {
+		sort.Strings(byAction[act])
+	}
+	out := make([]Binding, 0, len(bindingOrder))
+	for _, bi := range bindingOrder {
+		out = append(out, Binding{Keys: byAction[bi.Action], Action: bi.Action, Desc: bi.Desc})
+	}
+	return out
 }
 
 // Binding is one documented keybinding for the help overlay.

@@ -345,3 +345,23 @@ func TestDefaultConfigLeaderInertWithoutChords(t *testing.T) {
 		t.Fatal("space armed leader despite no chord bindings")
 	}
 }
+
+func TestBindingsReflectCustomKeys(t *testing.T) {
+	c := Config{Keys: map[string]string{"g": "stage_all"}}
+	km, _ := c.Keymap()
+	var keys []string
+	for _, b := range km.Bindings() {
+		if b.Action == ActStageAll {
+			keys = b.Keys
+		}
+	}
+	found := false
+	for _, k := range keys {
+		if k == "g" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ActStageAll keys = %v, want to include the remapped \"g\"", keys)
+	}
+}
