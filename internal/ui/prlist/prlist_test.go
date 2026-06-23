@@ -61,6 +61,30 @@ func TestCreateEscCancels(t *testing.T) {
 	}
 }
 
+func TestScrollDescriptionAt(t *testing.T) {
+	m := New()
+	m.Open("Pull Requests")
+	body := ""
+	for i := 0; i < 100; i++ {
+		body += fmt.Sprintf("line %d\n", i)
+	}
+	m.SetDetail(github.PR{Number: 1, Title: "t", Body: body}, "")
+	m.mode = modeDetail
+	_ = m.View(120, 40) // sizes the viewport and records the desc rect
+
+	// A point inside the description rect scrolls; outside does not.
+	inX, inY := m.descRectX+1, m.descRectY+1
+	if !m.ScrollDescriptionAt(inX, inY, 3) {
+		t.Fatalf("expected scroll inside desc rect")
+	}
+	if m.descVP.YOffset != 3 {
+		t.Fatalf("YOffset = %d, want 3", m.descVP.YOffset)
+	}
+	if m.ScrollDescriptionAt(m.descRectX+m.descRectW+5, inY, 3) {
+		t.Fatalf("did not expect scroll outside desc rect")
+	}
+}
+
 func TestDescriptionViewportScrolls(t *testing.T) {
 	m := New()
 	m.Open("Pull Requests")

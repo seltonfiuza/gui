@@ -752,8 +752,22 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		a.dragging = false
 		return a, nil
 	}
-	// While an overlay is open, ignore mouse input entirely.
-	if a.active != viewDiff || a.confirm != nil || a.commit != nil {
+	if a.confirm != nil || a.commit != nil {
+		return a, nil
+	}
+	// In the PR overlay, the wheel scrolls the description pane when the pointer is
+	// over it. headerHeight is 1 (see currentLayout), so subtract it to convert to
+	// PR-view-local coordinates. All other PR-view mouse input is ignored.
+	if a.active == viewPR {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			a.pr.ScrollDescriptionAt(msg.X, msg.Y-1, -3)
+		case tea.MouseButtonWheelDown:
+			a.pr.ScrollDescriptionAt(msg.X, msg.Y-1, 3)
+		}
+		return a, nil
+	}
+	if a.active != viewDiff {
 		return a, nil
 	}
 

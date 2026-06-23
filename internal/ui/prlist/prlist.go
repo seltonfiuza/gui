@@ -348,6 +348,23 @@ func (m *Model) updateDetail(msg tea.KeyMsg) Intent {
 	return Intent{Kind: IntentNone}
 }
 
+// ScrollDescriptionAt scrolls the description viewport by delta lines when the
+// screen point (x,y), in PR-view-local coordinates, falls within the description
+// pane rect recorded at last render. Returns true if it scrolled.
+func (m *Model) ScrollDescriptionAt(x, y, delta int) bool {
+	if m.mode != modeDetail {
+		return false
+	}
+	if x < m.descRectX || x >= m.descRectX+m.descRectW {
+		return false
+	}
+	if y < m.descRectY || y >= m.descRectY+m.descRectH {
+		return false
+	}
+	m.descVP.SetYOffset(m.descVP.YOffset + delta)
+	return true
+}
+
 // scrollDelta maps a scroll key to a line delta for a viewport of viewH rows.
 // ctrl+d/ctrl+u move by half a page (vim-style); j/k by one line.
 func scrollDelta(key string, viewH int) int {
