@@ -9,7 +9,6 @@ import (
 
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // Renderer caches the last render keyed by (markdown, width).
@@ -51,9 +50,9 @@ func (r *Renderer) render(markdown string, width int) string {
 	)
 	if err == nil {
 		if out, rerr := tr.Render(markdown); rerr == nil {
-			// Strip ANSI codes so downstream lipgloss pane rendering controls
-			// colours, then trim glamour's leading/trailing blank lines.
-			return strings.Trim(ansi.Strip(out), "\n")
+			// Keep glamour's ANSI styling (headings, emphasis, code); only trim
+			// its leading/trailing blank lines.
+			return strings.Trim(out, "\n")
 		}
 	}
 	// Fallback: plain-text wrap.

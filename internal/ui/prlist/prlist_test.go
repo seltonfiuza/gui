@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/seltonfiuza/gui/internal/github"
 )
@@ -91,7 +92,9 @@ func TestDescriptionRendersMarkdown(t *testing.T) {
 	m.Open("Pull Requests")
 	m.SetDetail(github.PR{Number: 1, Title: "t", Body: "# Heading\n\nSome body text."}, "")
 	m.mode = modeDetail
-	out := m.View(120, 40)
+	// Strip ANSI so substring checks aren't broken by glamour's per-span colour
+	// codes (which can split words like "body text" across escape sequences).
+	out := ansi.Strip(m.View(120, 40))
 	// The heading text survives markdown rendering (styling aside).
 	if !strings.Contains(out, "Heading") || !strings.Contains(out, "body text") {
 		t.Fatalf("description did not render markdown content:\n%s", out)
