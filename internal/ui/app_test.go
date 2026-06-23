@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
+	"github.com/seltonfiuza/gui/internal/config"
 	"github.com/seltonfiuza/gui/internal/git"
 	"github.com/seltonfiuza/gui/internal/ui/diffview"
 	"github.com/seltonfiuza/gui/internal/ui/styles"
@@ -75,13 +76,12 @@ func TestHelpToggle(t *testing.T) {
 	}
 }
 
-func TestBranchPanelLeaderChord(t *testing.T) {
+func TestBranchPanelShiftBinding(t *testing.T) {
 	a := newTestApp()
-	// Leader is space, then b => ActBranchPanel.
-	pressNamed(a, tea.KeySpace)
-	press(a, "b")
+	// B (shift+b) => ActBranchPanel (replaces the former space-leader chord).
+	press(a, "B")
 	if a.active != viewBranch {
-		t.Fatalf("space then b should open branch panel, got %v", a.active)
+		t.Fatalf("B should open branch panel, got %v", a.active)
 	}
 	// esc closes.
 	pressNamed(a, tea.KeyEsc)
@@ -149,6 +149,115 @@ func TestCommitDialogAcceptsTyping(t *testing.T) {
 	pressNamed(a, tea.KeyEscape)
 	if a.commit != nil {
 		t.Fatal("esc should close the commit dialog")
+	}
+}
+
+func TestStageAllNoopWhenNothingUnstaged(t *testing.T) {
+	a := newTestApp()
+	// Strip the unstaged + untracked files, leaving only a staged one.
+	a.status.Unstaged = nil
+	a.status.Untracked = nil
+	a.diff.SetStatus(a.status)
+
+	if cmd := a.stageAllCmd(); cmd != nil {
+		t.Fatal("stageAllCmd should be a no-op when nothing is unstaged")
+	}
+	if !strings.Contains(a.toast, "nothing to stage") {
+		t.Fatalf("expected a 'nothing to stage' toast, got %q", a.toast)
+	}
+}
+
+func TestStageAllReturnsCommandWhenChangesExist(t *testing.T) {
+	a := newTestApp() // has b.go unstaged + c.go untracked
+	if cmd := a.stageAllCmd(); cmd == nil {
+		t.Fatal("stageAllCmd should return a command when there are changes to stage")
+	}
+}
+
+func TestUnstageAllNoopWhenNothingStaged(t *testing.T) {
+	a := newTestApp()
+	a.status.Staged = nil
+	a.diff.SetStatus(a.status)
+
+	if cmd := a.unstageAllCmd(); cmd != nil {
+		t.Fatal("unstageAllCmd should be a no-op when nothing is staged")
+	}
+	if !strings.Contains(a.toast, "nothing to unstage") {
+		t.Fatalf("expected a 'nothing to unstage' toast, got %q", a.toast)
+	}
+}
+
+func TestUnstageAllReturnsCommandWhenStagedExists(t *testing.T) {
+	a := newTestApp() // has a.go staged
+	if cmd := a.unstageAllCmd(); cmd == nil {
+		t.Fatal("unstageAllCmd should return a command when there are staged files")
+	}
+}
+
+func TestPushOpensConfirm(t *testing.T) {
+	a := newTestApp()
+	press(a, "p")
+	if a.confirm == nil {
+		t.Fatal("p should open a push confirmation")
+	}
+	if !strings.Contains(a.confirm.prompt, "Push") {
+		t.Fatalf("confirm prompt = %q, want it to mention Push", a.confirm.prompt)
+	}
+	// Decline leaves nothing pending.
+	press(a, "n")
+	if a.confirm != nil {
+		t.Fatal("n should dismiss the push confirmation")
+	}
+}
+
+func TestCommandPaletteOpensAndRunsAction(t *testing.T) {
+	a := newTestApp() // a.go is staged
+	a.handleKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if a.active != viewPalette {
+		t.Fatalf("ctrl+p should open the command palette, active=%v", a.active)
+	}
+	// Filter to the commit command and run it.
+	press(a, "commit")
+	pressNamed(a, tea.KeyEnter)
+	if a.active != viewDiff {
+		t.Fatal("running a command should close the palette")
+	}
+	if a.commit == nil {
+		t.Fatal("running 'commit' from the palette should open the commit dialog")
+	}
+}
+
+func TestCommandPaletteEscCloses(t *testing.T) {
+	a := newTestApp()
+	a.handleKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if a.active != viewPalette {
+		t.Fatalf("ctrl+p should open the palette, active=%v", a.active)
+	}
+	pressNamed(a, tea.KeyEsc)
+	if a.active != viewDiff {
+		t.Fatal("esc should close the palette")
+	}
+}
+
+func TestPaletteCommandsIncludeOpsExcludeNav(t *testing.T) {
+	cmds := paletteCommands()
+	has := func(act config.Action) bool {
+		for _, c := range cmds {
+			if c.Action == act {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []config.Action{config.ActPush, config.ActCommit, config.ActStageAll, config.ActBranchPanel} {
+		if !has(want) {
+			t.Errorf("palette commands missing operation %v", want)
+		}
+	}
+	for _, unwanted := range []config.Action{config.ActDown, config.ActUp, config.ActCommandPalette} {
+		if has(unwanted) {
+			t.Errorf("palette commands should exclude %v", unwanted)
+		}
 	}
 }
 
@@ -523,11 +632,10 @@ func TestThemePickerLivePreviewAndRevert(t *testing.T) {
 	// so Open() records it and `j` has a different theme to preview.
 	styles.SetTheme("tokyonight")
 
-	// Open the picker via leader chord (space then t).
-	press(a, " ")
-	press(a, "t")
+	// Open the picker via the T (shift+t) binding.
+	press(a, "T")
 	if a.active != viewTheme {
-		t.Fatalf("space+t should open the theme picker, active=%v", a.active)
+		t.Fatalf("T should open the theme picker, active=%v", a.active)
 	}
 	opened := styles.ActiveTheme()
 
@@ -558,8 +666,7 @@ func TestThemePickerConfirmUpdatesConfig(t *testing.T) {
 	defer styles.SetTheme(styles.DefaultTheme)
 	a := newTestApp()
 	styles.SetTheme("tokyonight")
-	press(a, " ")
-	press(a, "t")
+	press(a, "T")
 	press(a, "j") // preview the next theme
 	chosen := styles.ActiveTheme()
 	pressNamed(a, tea.KeyEnter)

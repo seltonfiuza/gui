@@ -24,6 +24,7 @@ import (
 	"github.com/seltonfiuza/gui/internal/ui/branchpanel"
 	"github.com/seltonfiuza/gui/internal/ui/diffview"
 	"github.com/seltonfiuza/gui/internal/ui/help"
+	"github.com/seltonfiuza/gui/internal/ui/palette"
 	"github.com/seltonfiuza/gui/internal/ui/prlist"
 	"github.com/seltonfiuza/gui/internal/ui/styles"
 	"github.com/seltonfiuza/gui/internal/ui/themepicker"
@@ -38,6 +39,7 @@ const (
 	viewHelp
 	viewTheme
 	viewPR
+	viewPalette
 )
 
 // ---- messages returned by git commands ----
@@ -114,12 +116,13 @@ type App struct {
 	status *git.Status
 	remote *git.Remote
 
-	active view
-	diff   diffview.Model
-	branch branchpanel.Model
-	help   help.Model
-	theme  themepicker.Model
-	pr     prlist.Model
+	active  view
+	diff    diffview.Model
+	branch  branchpanel.Model
+	help    help.Model
+	theme   themepicker.Model
+	pr      prlist.Model
+	palette palette.Model
 
 	// dragging is true while the user holds the mouse on the divider to resize.
 	dragging bool
@@ -191,6 +194,9 @@ type commitState struct {
 // commitDoneMsg is emitted after a commit attempt completes.
 type commitDoneMsg struct{ err error }
 
+// pushDoneMsg is emitted after a push attempt completes.
+type pushDoneMsg struct{ err error }
+
 // New constructs the root model. version is the build version shown in the
 // footer (pass "dev" for local builds). It loads persisted config and applies
 // the saved theme so the UI launches in the user's preferred colors.
@@ -210,6 +216,7 @@ func New(repo *git.Service, version string) tea.Model {
 		help:        help.New(),
 		theme:       themepicker.New(),
 		pr:          prlist.New(),
+		palette:     palette.New(),
 		listWidth:   defaultListWidth,
 		autoRefresh: true,
 		version:     version,
@@ -387,6 +394,9 @@ func (a *App) overlayActive() bool {
 		return true
 	}
 	if a.active == viewPR {
+		return true
+	}
+	if a.active == viewPalette {
 		return true
 	}
 	return false
@@ -577,6 +587,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.toast = "committed"
 		// Force the selected file's diff to reload — its staged content is gone.
 		a.forceDiffReload = true
+		return a, a.loadStatusCmd()
+
+	case pushDoneMsg:
+		if msg.err != nil {
+			a.toast = msg.err.Error()
+			return a, nil
+		}
+		a.toast = "pushed"
+		// Refresh so the ahead/behind counts update.
 		return a, a.loadStatusCmd()
 
 	case needsForceDeleteMsg:
@@ -779,6 +798,8 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleThemeKey(msg)
 	case viewPR:
 		return a.handlePRKey(msg)
+	case viewPalette:
+		return a.handlePaletteKey(msg)
 	}
 
 	// viewDiff: route through the dispatcher.
@@ -816,9 +837,59 @@ func (a *App) handlePRKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
+// handlePaletteKey routes a key to the command palette. Cancel closes it; Run
+// closes it and dispatches the chosen action (which may itself open another
+// overlay, e.g. the commit dialog or branch panel).
+func (a *App) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	res, cmd := a.palette.Update(msg)
+	switch res.Kind {
+	case palette.ResultCancel:
+		a.active = viewDiff
+		return a, nil
+	case palette.ResultRun:
+		a.active = viewDiff
+		_, dcmd := a.dispatchAction(res.Action)
+		return a, tea.Batch(cmd, dcmd)
+	}
+	return a, cmd
+}
+
+// paletteCommands builds the palette's command list from the keymap bindings,
+// omitting pure navigation/cursor actions (and the palette itself) so it reads as
+// a menu of operations rather than movement keys.
+func paletteCommands() []palette.Command {
+	skip := map[config.Action]bool{
+		config.ActNone:           true,
+		config.ActDown:           true,
+		config.ActUp:             true,
+		config.ActConfirm:        true,
+		config.ActCancel:         true,
+		config.ActCollapse:       true,
+		config.ActExpand:         true,
+		config.ActFocusToggle:    true,
+		config.ActHunkNext:       true,
+		config.ActHunkPrev:       true,
+		config.ActPaneGrow:       true,
+		config.ActPaneShrink:     true,
+		config.ActCommandPalette: true,
+	}
+	var cmds []palette.Command
+	for _, b := range config.DefaultKeymap().Bindings() {
+		if skip[b.Action] {
+			continue
+		}
+		cmds = append(cmds, palette.Command{
+			Action: b.Action,
+			Title:  b.Desc,
+			Keys:   strings.Join(b.Keys, " / "),
+		})
+	}
+	return cmds
+}
+
 // normalizeKey maps Bubble Tea's key strings onto the names the config keymap
-// uses. Notably Bubble Tea reports the space key as " ", while the default
-// keymap's leader is "space".
+// uses. Notably Bubble Tea reports the space key as " ", which the keymap spells
+// "space".
 func normalizeKey(s string) string {
 	if s == " " {
 		return "space"
@@ -828,6 +899,17 @@ func normalizeKey(s string) string {
 
 func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	action := a.dispatcher.Resolve(normalizeKey(msg.String()))
+	if action == config.ActNone {
+		// Unhandled key: let the diff viewport scroll (pgup/pgdn/etc).
+		return a, a.diff.ForwardViewport(msg)
+	}
+	return a.dispatchAction(action)
+}
+
+// dispatchAction performs a resolved high-level action. It is shared by the
+// keymap dispatcher (handleDiffKey) and the command palette, so every command is
+// runnable both by its key and by name.
+func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 	switch action {
 	case config.ActQuit:
 		// FR-4: warn before quitting if a git operation is in progress.
@@ -938,8 +1020,18 @@ func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case config.ActStageToggle:
 		return a, a.stageToggleCmd()
+	case config.ActStageAll:
+		return a, a.stageAllCmd()
+	case config.ActUnstageAll:
+		return a, a.unstageAllCmd()
 	case config.ActCommit:
 		return a.openCommit()
+	case config.ActPush:
+		return a.confirmPush()
+	case config.ActCommandPalette:
+		a.palette.SetCommands(paletteCommands())
+		a.active = viewPalette
+		return a, a.palette.Open()
 	case config.ActUndo:
 		return a.discardHunk()
 	case config.ActUndoFile:
@@ -947,8 +1039,7 @@ func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case config.ActRecover:
 		return a.recover()
 	}
-	// Unhandled key: let the diff viewport scroll (pgup/pgdn/etc).
-	return a, a.diff.ForwardViewport(msg)
+	return a, nil
 }
 
 // refreshDiffCmd loads the diff for the currently selected file if it differs
@@ -977,6 +1068,59 @@ func (a *App) stageToggleCmd() tea.Cmd {
 		return fileMutationCmd(func() error { return repo.Unstage(path) })
 	}
 	return fileMutationCmd(func() error { return repo.Stage(path) })
+}
+
+// stageAllCmd stages every unstaged + untracked file (git add -A). It is a no-op
+// (with a toast) when there is nothing to stage.
+func (a *App) stageAllCmd() tea.Cmd {
+	if a.status != nil && len(a.status.Unstaged) == 0 && len(a.status.Untracked) == 0 {
+		a.toast = "nothing to stage"
+		return nil
+	}
+	repo := a.repo
+	a.toast = ""
+	return fileMutationCmd(func() error { return repo.StageAll() })
+}
+
+// unstageAllCmd unstages every staged file (git restore --staged .). It is a
+// no-op (with a toast) when nothing is staged.
+func (a *App) unstageAllCmd() tea.Cmd {
+	if a.status != nil && len(a.status.Staged) == 0 {
+		a.toast = "nothing to unstage"
+		return nil
+	}
+	repo := a.repo
+	a.toast = ""
+	return fileMutationCmd(func() error { return repo.UnstageAll() })
+}
+
+// confirmPush opens a confirmation before pushing, since it publishes commits to
+// the remote. The prompt names the branch and its upstream when known.
+func (a *App) confirmPush() (tea.Model, tea.Cmd) {
+	branch := "the current branch"
+	target := "its upstream"
+	if a.status != nil {
+		if a.status.Branch != "" && a.status.Branch != "(detached)" {
+			branch = "'" + a.status.Branch + "'"
+		}
+		if a.status.Upstream != "" {
+			target = a.status.Upstream
+		}
+	}
+	a.confirm = &confirmState{
+		prompt: fmt.Sprintf("Push %s to %s? (y/n)", branch, target),
+		onYes:  func(app *App) tea.Cmd { return app.pushCmd() },
+	}
+	return a, nil
+}
+
+// pushCmd pushes the current branch off the UI thread.
+func (a *App) pushCmd() tea.Cmd {
+	repo := a.repo
+	a.toast = "pushing…"
+	return func() tea.Msg {
+		return pushDoneMsg{err: repo.Push()}
+	}
 }
 
 // openCommit opens the commit-message dialog. It refuses (with a toast) when
@@ -1208,6 +1352,8 @@ func (a *App) View() string {
 		body = a.theme.View(a.width, a.bodyHeight())
 	case a.active == viewPR:
 		body = a.pr.View(a.width, a.bodyHeight())
+	case a.active == viewPalette:
+		body = a.palette.View(a.width, a.bodyHeight())
 	default:
 		body = a.diff.View()
 	}
@@ -1293,13 +1439,13 @@ func (a *App) renderHeader() string {
 // stays on one row instead of being aggressively ellipsized.
 func (a *App) footerHint() string {
 	if a.width < 100 {
-		return "j/k move · enter diff · s stage · C commit · u/U discard · ? help · q quit"
+		return "j/k move · s stage · a/A stage all · C commit · p push · ctrl+p palette · ? help · q quit"
 	}
 	auto := "on"
 	if !a.autoRefresh {
 		auto = "off"
 	}
-	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · C commit · r refresh · ctrl+t auto:" + auto + " · space b branches · space t theme · ? help · q quit"
+	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · a/A stage/unstage all · C commit · p push · ctrl+p palette · r refresh · ctrl+t auto:" + auto + " · B branches · T theme · P prs · ? help · q quit"
 }
 
 func (a *App) renderFooter() string {

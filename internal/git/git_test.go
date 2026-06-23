@@ -596,6 +596,44 @@ func TestRebase(t *testing.T) {
 	}
 }
 
+func TestPush(t *testing.T) {
+	requireGit(t)
+
+	// A bare repo to act as the remote.
+	remote := t.TempDir()
+	runGit(t, remote, "init", "--bare", "-b", "main")
+
+	dir := newRepo(t) // initial commit on main
+	runGit(t, dir, "remote", "add", "origin", remote)
+	// Establish the upstream with an initial push (so plain `git push` works).
+	runGit(t, dir, "push", "-u", "origin", "main")
+
+	// A new commit that the service should push.
+	writeFile(t, dir, "pushed.txt", "data\n")
+	runGit(t, dir, "add", "-A")
+	runGit(t, dir, "commit", "-m", "second")
+
+	svc, _ := Open(dir)
+	if err := svc.Push(); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	// The remote's main must now point at the local HEAD.
+	want := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	got := strings.TrimSpace(runGit(t, remote, "rev-parse", "main"))
+	if got != want {
+		t.Fatalf("remote main = %q, want %q", got, want)
+	}
+}
+
+func TestPushNoUpstreamErrors(t *testing.T) {
+	dir := newRepo(t) // no remote configured
+	svc, _ := Open(dir)
+	if err := svc.Push(); err == nil {
+		t.Fatal("Push with no remote/upstream should return an error")
+	}
+}
+
 // multiHunkContent returns a 20-line file body for hunk-level fixtures.
 func multiHunkContent(lines ...string) string {
 	return strings.Join(lines, "\n") + "\n"
