@@ -1,0 +1,61 @@
+package prlist
+
+import (
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/seltonfiuza/gui/internal/github"
+)
+
+func runeKey(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+
+func TestCreateFormOpensOnN(t *testing.T) {
+	m := New()
+	m.SetPRs([]github.PR{{Number: 1, Title: "x"}})
+	intent, _ := m.Update(runeKey('n'))
+	if intent.Kind != IntentStartCreate {
+		t.Fatalf("Update(n) kind = %v, want IntentStartCreate", intent.Kind)
+	}
+}
+
+func TestCreateSubmitEmptyTitle(t *testing.T) {
+	m := New()
+	m.OpenCreate("feature", "main")
+	intent, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if intent.Kind != IntentNone {
+		t.Fatalf("empty-title submit kind = %v, want IntentNone", intent.Kind)
+	}
+	if m.createNote == "" {
+		t.Error("expected a validation note for empty title")
+	}
+}
+
+func TestCreateSubmitValid(t *testing.T) {
+	m := New()
+	m.OpenCreate("feature", "main")
+	m.Update(runeKey('H'))
+	m.Update(runeKey('i'))
+	intent, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	if intent.Kind != IntentCreate {
+		t.Fatalf("valid submit kind = %v, want IntentCreate", intent.Kind)
+	}
+	if intent.Opts.Title != "Hi" {
+		t.Errorf("Opts.Title = %q, want Hi", intent.Opts.Title)
+	}
+	if intent.Opts.Head != "feature" {
+		t.Errorf("Opts.Head = %q, want feature", intent.Opts.Head)
+	}
+	if intent.Opts.Base != "main" {
+		t.Errorf("Opts.Base = %q, want main", intent.Opts.Base)
+	}
+}
+
+func TestCreateEscCancels(t *testing.T) {
+	m := New()
+	m.OpenCreate("feature", "main")
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeList {
+		t.Fatalf("after esc mode = %v, want modeList", m.mode)
+	}
+}
