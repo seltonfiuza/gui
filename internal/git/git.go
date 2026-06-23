@@ -732,6 +732,29 @@ func (s *Service) Push() error {
 	return err
 }
 
+// DefaultBranch returns origin's default branch short name (e.g. "main") by
+// reading refs/remotes/origin/HEAD. Callers fall back to a sensible default
+// when this errors (e.g. origin/HEAD not set).
+func (s *Service) DefaultBranch() (string, error) {
+	out, err := s.run("symbolic-ref", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return "", err
+	}
+	ref := strings.TrimSpace(out)
+	if i := strings.LastIndex(ref, "/"); i >= 0 {
+		return ref[i+1:], nil
+	}
+	return ref, nil
+}
+
+// PushSetUpstream pushes branch to origin and sets it as the upstream
+// (git push -u origin <branch>), so a never-pushed branch becomes available on
+// the remote before opening a request.
+func (s *Service) PushSetUpstream(branch string) error {
+	_, err := s.run("push", "-u", "origin", branch)
+	return err
+}
+
 // Commit records the staged changes as a new commit with the given message.
 // It does not stage anything itself, mirroring `git commit`.
 func (s *Service) Commit(message string) error {
