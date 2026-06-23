@@ -79,6 +79,8 @@ func TestResolveDirectBindings(t *testing.T) {
 		"up":     ActUp,
 		"enter":  ActConfirm,
 		"s":      ActStageToggle,
+		"p":      ActPush,
+		"ctrl+p": ActCommandPalette,
 		"u":      ActUndo,
 		"U":      ActUndoFile,
 		"ctrl+r": ActRecover,

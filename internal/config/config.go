@@ -49,6 +49,9 @@ const (
 	ActCommit     // C (shift+c): open the commit-message dialog and commit staged changes
 	ActStageAll   // a: stage all unstaged + untracked files (git add -A)
 	ActUnstageAll // A (shift+a): unstage all staged files (git restore --staged .)
+	ActPush       // p: push the current branch to its upstream (git push)
+	// Appended for the command palette. Keep at the end.
+	ActCommandPalette // ctrl+p: open the fuzzy command palette (search all commands)
 )
 
 // Keymap maps keys/chords to actions. Leader is the chord prefix.
@@ -99,6 +102,8 @@ func DefaultKeymap() Keymap {
 			"B":      ActBranchPanel,
 			"T":      ActThemePicker,
 			"P":      ActPRList,
+			"p":      ActPush,
+			"ctrl+p": ActCommandPalette,
 			"esc":    ActCancel,
 		},
 		// No leader chords: every action is a direct key (see DefaultKeymap doc).
@@ -132,6 +137,8 @@ func (k Keymap) Bindings() []Binding {
 		{Keys: []string{"r"}, Action: ActRefresh, Desc: "Refresh status"},
 		{Keys: []string{"ctrl+t"}, Action: ActToggleAutoRefresh, Desc: "Toggle auto-refresh on/off"},
 		{Keys: []string{"ctrl+g"}, Action: ActToggleRawDiff, Desc: "Toggle raw / cleaned diff view"},
+		{Keys: []string{"p"}, Action: ActPush, Desc: "Push the current branch (git push)"},
+		{Keys: []string{"ctrl+p"}, Action: ActCommandPalette, Desc: "Open the command palette (fuzzy search)"},
 		{Keys: []string{"B"}, Action: ActBranchPanel, Desc: "Open branch panel"},
 		{Keys: []string{"T"}, Action: ActThemePicker, Desc: "Open theme picker (live preview)"},
 		{Keys: []string{"P"}, Action: ActPRList, Desc: "Open merge/pull request list"},

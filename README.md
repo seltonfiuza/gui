@@ -101,6 +101,8 @@ Leader key defaults to **`Space`**.
 | `s`                | Stage or unstage the selected file                       |
 | `a` / `Shift+A`    | Stage all changed + untracked files / unstage all staged files |
 | `Shift+C`          | Commit staged changes (opens a commit-message dialog)    |
+| `p`                | Push the current branch (`git push`, with confirmation)  |
+| `Ctrl+P`           | Open the **command palette** (fuzzy-search every command) |
 | `u`                | Discard the **hunk under the cursor** (unstaged: reverse-apply; staged: unstage the hunk) |
 | `U`                | Discard the **whole file** (always confirms; `git restore` / `git clean` for untracked) |
 | `Ctrl+R`           | Recover the most recently discarded change (LIFO undo stack) |

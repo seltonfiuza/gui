@@ -724,6 +724,14 @@ func (s *Service) Rebase(onto string) error {
 	return err
 }
 
+// Push pushes the current branch to its upstream (git push). When the branch has
+// no upstream configured, git fails with an explanatory message that the caller
+// can surface to the user.
+func (s *Service) Push() error {
+	_, err := s.run("push")
+	return err
+}
+
 // Commit records the staged changes as a new commit with the given message.
 // It does not stage anything itself, mirroring `git commit` — the message is
 // passed via stdin (-F -) so newlines and shell-significant characters survive.
