@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // requireGit skips the test if git is not on PATH.
@@ -909,6 +908,3 @@ func TestBlameLine(t *testing.T) {
 		t.Errorf("Summary = %q, want initial", e.Summary)
 	}
 }
-
-// Ensure the time import is used (compile-time guard).
-var _ = time.Time{}
