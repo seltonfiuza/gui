@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // StatusCode is the state of a file in the index or worktree.
@@ -825,4 +826,65 @@ func (s *Service) RebaseInProgress() (bool, error) {
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// BlameEntry is the commit information for a single blamed source line.
+type BlameEntry struct {
+	CommitHash   string    // short hash; empty when NotCommitted
+	Author       string    // author name
+	AuthorTime   time.Time // author timestamp
+	Summary      string    // commit subject line
+	NotCommitted bool      // true when blame reports the all-zero hash
+}
+
+// BlameLine runs `git blame --line-porcelain` for a single 1-based line of path
+// and returns its commit information. An uncommitted line yields NotCommitted.
+func (s *Service) BlameLine(path string, line int) (BlameEntry, error) {
+	if line < 1 {
+		line = 1
+	}
+	spec := fmt.Sprintf("%d,%d", line, line)
+	out, err := s.run("blame", "--line-porcelain", "-L", spec, "--", path)
+	if err != nil {
+		return BlameEntry{}, err
+	}
+	return parseBlamePorcelain(out), nil
+}
+
+// parseBlamePorcelain parses the porcelain output for one line. The first line is
+// "<40-hex> <orig-line> <final-line> <count>"; subsequent "key value" lines carry
+// author/summary/time; the content line is prefixed with a tab.
+func parseBlamePorcelain(out string) BlameEntry {
+	var e BlameEntry
+	lines := strings.Split(out, "\n")
+	if len(lines) == 0 {
+		return e
+	}
+	header := strings.Fields(lines[0])
+	if len(header) > 0 {
+		full := header[0]
+		if full == "0000000000000000000000000000000000000000" {
+			e.NotCommitted = true
+		} else if len(full) >= 7 {
+			e.CommitHash = full[:7]
+		} else {
+			e.CommitHash = full
+		}
+	}
+	for _, ln := range lines[1:] {
+		if strings.HasPrefix(ln, "\t") {
+			break // reached the content line; metadata is done
+		}
+		switch {
+		case strings.HasPrefix(ln, "author "):
+			e.Author = strings.TrimPrefix(ln, "author ")
+		case strings.HasPrefix(ln, "summary "):
+			e.Summary = strings.TrimPrefix(ln, "summary ")
+		case strings.HasPrefix(ln, "author-time "):
+			if secs, perr := strconv.ParseInt(strings.TrimPrefix(ln, "author-time "), 10, 64); perr == nil {
+				e.AuthorTime = time.Unix(secs, 0)
+			}
+		}
+	}
+	return e
 }
