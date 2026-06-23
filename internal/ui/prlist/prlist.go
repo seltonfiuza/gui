@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
@@ -28,12 +30,17 @@ const (
 	IntentClose
 	// IntentOpenDetail asks the root to fetch the detail for Number.
 	IntentOpenDetail
+	// IntentStartCreate asks the root to gather head/base and open the create form.
+	IntentStartCreate
+	// IntentCreate asks the root to create a request from Opts.
+	IntentCreate
 )
 
 // Intent is returned from Update for the root App to act on.
 type Intent struct {
 	Kind   IntentKind
 	Number int
+	Opts   github.CreatePROpts
 }
 
 type mode int
@@ -41,6 +48,18 @@ type mode int
 const (
 	modeList mode = iota
 	modeDetail
+	modeCreate
+)
+
+// createField is the focused field in the create form.
+type createField int
+
+const (
+	fieldTitle createField = iota
+	fieldBody
+	fieldBase
+	fieldDraft
+	createFieldCount
 )
 
 // detailFocus is the pane the scroll keys act on in the detail screen.
@@ -73,6 +92,17 @@ type Model struct {
 	descScroll    int      // first visible description line
 	descH         int      // visible description rows at last render
 	descTotal     int      // total wrapped description lines at last render
+
+	// create form state
+	titleInput  textinput.Model
+	bodyInput   textarea.Model
+	baseInput   textinput.Model
+	draft       bool
+	head        string
+	createNoun  string
+	createFocus createField
+	createNote  string
+	createErr   string
 }
 
 // New builds an empty request panel.
@@ -126,6 +156,45 @@ func (m *Model) SetDetailError(msg string) {
 	m.detailLoading = false
 }
 
+// OpenCreate enters the create form with head shown read-only and base
+// prefilled (editable). Returns the cmd that focuses the title input.
+func (m *Model) OpenCreate(head, base, noun string) tea.Cmd {
+	m.mode = modeCreate
+	m.head = head
+	m.createNoun = noun
+	m.draft = false
+	m.createFocus = fieldTitle
+	m.createNote = ""
+	m.createErr = ""
+
+	ti := textinput.New()
+	ti.Placeholder = noun + " title"
+	m.titleInput = ti
+
+	ba := textinput.New()
+	ba.Placeholder = "base branch"
+	ba.SetValue(base)
+	m.baseInput = ba
+
+	ta := textarea.New()
+	ta.Placeholder = "Description (optional)"
+	m.bodyInput = ta
+
+	return m.titleInput.Focus()
+}
+
+// BackToList returns from the create form to the list (loading state, ready for
+// the root to reload the requests).
+func (m *Model) BackToList() {
+	m.mode = modeList
+	m.loading = true
+	m.createNote = ""
+	m.createErr = ""
+}
+
+// SetCreateError shows an inline error in the create form (keeps it open).
+func (m *Model) SetCreateError(msg string) { m.createErr = msg }
+
 // selected returns the request under the cursor.
 func (m *Model) selected() (github.PR, bool) {
 	if m.cursor < 0 || m.cursor >= len(m.prs) {
@@ -134,12 +203,16 @@ func (m *Model) selected() (github.PR, bool) {
 	return m.prs[m.cursor], true
 }
 
-// Update handles a key and returns an Intent for the root to execute.
-func (m *Model) Update(msg tea.KeyMsg) Intent {
-	if m.mode == modeDetail {
-		return m.updateDetail(msg)
+// Update handles a key and returns an Intent for the root to execute, plus a
+// cmd from any focused text field.
+func (m *Model) Update(msg tea.KeyMsg) (Intent, tea.Cmd) {
+	switch m.mode {
+	case modeDetail:
+		return m.updateDetail(msg), nil
+	case modeCreate:
+		return m.updateCreate(msg)
 	}
-	return m.updateList(msg)
+	return m.updateList(msg), nil
 }
 
 func (m *Model) updateList(msg tea.KeyMsg) Intent {
@@ -154,6 +227,8 @@ func (m *Model) updateList(msg tea.KeyMsg) Intent {
 		if m.cursor > 0 {
 			m.cursor--
 		}
+	case "n":
+		return Intent{Kind: IntentStartCreate}
 	case "enter":
 		if pr, ok := m.selected(); ok {
 			m.mode = modeDetail
@@ -169,6 +244,72 @@ func (m *Model) updateList(msg tea.KeyMsg) Intent {
 		}
 	}
 	return Intent{Kind: IntentNone}
+}
+
+func (m *Model) updateCreate(msg tea.KeyMsg) (Intent, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.mode = modeList
+		return Intent{Kind: IntentNone}, nil
+	case "ctrl+s":
+		title := strings.TrimSpace(m.titleInput.Value())
+		if title == "" {
+			m.createNote = "a title is required"
+			return Intent{Kind: IntentNone}, nil
+		}
+		opts := github.CreatePROpts{
+			Title: title,
+			Body:  m.bodyInput.Value(),
+			Head:  m.head,
+			Base:  strings.TrimSpace(m.baseInput.Value()),
+			Draft: m.draft,
+		}
+		return Intent{Kind: IntentCreate, Opts: opts}, nil
+	case "tab":
+		m.createFocus = createField((int(m.createFocus) + 1) % int(createFieldCount))
+		return Intent{Kind: IntentNone}, m.syncCreateFocus()
+	case "shift+tab":
+		m.createFocus = createField((int(m.createFocus) - 1 + int(createFieldCount)) % int(createFieldCount))
+		return Intent{Kind: IntentNone}, m.syncCreateFocus()
+	}
+
+	// Draft is a toggle, not a text field.
+	if m.createFocus == fieldDraft {
+		switch msg.String() {
+		case " ", "enter":
+			m.draft = !m.draft
+		}
+		return Intent{Kind: IntentNone}, nil
+	}
+
+	// Delegate to the focused text field.
+	var cmd tea.Cmd
+	switch m.createFocus {
+	case fieldTitle:
+		m.titleInput, cmd = m.titleInput.Update(msg)
+	case fieldBody:
+		m.bodyInput, cmd = m.bodyInput.Update(msg)
+	case fieldBase:
+		m.baseInput, cmd = m.baseInput.Update(msg)
+	}
+	return Intent{Kind: IntentNone}, cmd
+}
+
+// syncCreateFocus blurs every field then focuses the active one, returning its
+// focus cmd (cursor blink).
+func (m *Model) syncCreateFocus() tea.Cmd {
+	m.titleInput.Blur()
+	m.baseInput.Blur()
+	m.bodyInput.Blur()
+	switch m.createFocus {
+	case fieldTitle:
+		return m.titleInput.Focus()
+	case fieldBody:
+		return m.bodyInput.Focus()
+	case fieldBase:
+		return m.baseInput.Focus()
+	}
+	return nil
 }
 
 func (m *Model) updateDetail(msg tea.KeyMsg) Intent {
@@ -243,8 +384,11 @@ func clampScroll(offset, total, viewH int) int {
 
 // View renders the overlay centered in the given area.
 func (m *Model) View(width, height int) string {
-	if m.mode == modeDetail {
+	switch m.mode {
+	case modeDetail:
 		return m.viewDetail(width, height)
+	case modeCreate:
+		return m.viewCreate(width, height)
 	}
 	return m.viewList(width, height)
 }
@@ -270,12 +414,64 @@ func (m *Model) viewList(width, height int) string {
 		}
 	}
 
-	tail := []string{"", styles.Desc.Render("j/k move · enter open · esc close")}
+	tail := []string{"", styles.Desc.Render("j/k move · enter open · n new · esc close")}
 
 	budget := height - 4 - len(head) - len(tail)
 	mid = windowLines(mid, cursorLine, budget)
 
 	rows := append(append(append([]string{}, head...), mid...), tail...)
+	box := styles.Overlay.Render(strings.Join(rows, "\n"))
+	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
+}
+
+func (m *Model) viewCreate(width, height int) string {
+	inner := width / 2
+	if inner < 30 {
+		inner = 30
+	}
+	if width > 8 && inner > width-8 {
+		inner = width - 8
+	}
+	m.titleInput.Width = inner
+	m.baseInput.Width = inner
+	m.bodyInput.SetWidth(inner)
+	m.bodyInput.SetHeight(5)
+
+	label := func(s string, focused bool) string {
+		if focused {
+			return styles.Branch.Render("▸ " + s)
+		}
+		return styles.Desc.Render("  " + s)
+	}
+	draftLabel := "[ ] draft"
+	if m.draft {
+		draftLabel = "[x] draft"
+	}
+
+	rows := []string{
+		styles.OverlayTitle.Render("New " + m.createNoun),
+		"",
+		styles.Desc.Render("head: " + m.head),
+		"",
+		label("Title", m.createFocus == fieldTitle),
+		m.titleInput.View(),
+		"",
+		label("Description", m.createFocus == fieldBody),
+		m.bodyInput.View(),
+		"",
+		label("Base", m.createFocus == fieldBase),
+		m.baseInput.View(),
+		"",
+		label(draftLabel, m.createFocus == fieldDraft),
+	}
+	if m.createNote != "" {
+		rows = append(rows, "", styles.Inline.Render(m.createNote))
+	}
+	if m.createErr != "" {
+		rows = append(rows, "", styles.Inline.Render(m.createErr))
+	}
+	rows = append(rows, "", styles.Desc.Render("tab move · ctrl+s create · esc cancel"))
+
 	box := styles.Overlay.Render(strings.Join(rows, "\n"))
 	return lipgloss.Place(maxi(width, 1), maxi(height, 1), lipgloss.Center, lipgloss.Center, box)
 }
