@@ -817,8 +817,8 @@ func (a *App) handlePRKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // normalizeKey maps Bubble Tea's key strings onto the names the config keymap
-// uses. Notably Bubble Tea reports the space key as " ", while the default
-// keymap's leader is "space".
+// uses. Notably Bubble Tea reports the space key as " ", which the keymap spells
+// "space".
 func normalizeKey(s string) string {
 	if s == " " {
 		return "space"
@@ -938,6 +938,10 @@ func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case config.ActStageToggle:
 		return a, a.stageToggleCmd()
+	case config.ActStageAll:
+		return a, a.stageAllCmd()
+	case config.ActUnstageAll:
+		return a, a.unstageAllCmd()
 	case config.ActCommit:
 		return a.openCommit()
 	case config.ActUndo:
@@ -977,6 +981,30 @@ func (a *App) stageToggleCmd() tea.Cmd {
 		return fileMutationCmd(func() error { return repo.Unstage(path) })
 	}
 	return fileMutationCmd(func() error { return repo.Stage(path) })
+}
+
+// stageAllCmd stages every unstaged + untracked file (git add -A). It is a no-op
+// (with a toast) when there is nothing to stage.
+func (a *App) stageAllCmd() tea.Cmd {
+	if a.status != nil && len(a.status.Unstaged) == 0 && len(a.status.Untracked) == 0 {
+		a.toast = "nothing to stage"
+		return nil
+	}
+	repo := a.repo
+	a.toast = ""
+	return fileMutationCmd(func() error { return repo.StageAll() })
+}
+
+// unstageAllCmd unstages every staged file (git restore --staged .). It is a
+// no-op (with a toast) when nothing is staged.
+func (a *App) unstageAllCmd() tea.Cmd {
+	if a.status != nil && len(a.status.Staged) == 0 {
+		a.toast = "nothing to unstage"
+		return nil
+	}
+	repo := a.repo
+	a.toast = ""
+	return fileMutationCmd(func() error { return repo.UnstageAll() })
 }
 
 // openCommit opens the commit-message dialog. It refuses (with a toast) when
@@ -1293,13 +1321,13 @@ func (a *App) renderHeader() string {
 // stays on one row instead of being aggressively ellipsized.
 func (a *App) footerHint() string {
 	if a.width < 100 {
-		return "j/k move · enter diff · s stage · C commit · u/U discard · ? help · q quit"
+		return "j/k move · enter diff · s stage · a/A stage/unstage all · C commit · u/U discard · ? help · q quit"
 	}
 	auto := "on"
 	if !a.autoRefresh {
 		auto = "off"
 	}
-	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · C commit · r refresh · ctrl+t auto:" + auto + " · space b branches · space t theme · ? help · q quit"
+	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · a/A stage/unstage all · C commit · r refresh · ctrl+t auto:" + auto + " · B branches · T theme · P prs · ? help · q quit"
 }
 
 func (a *App) renderFooter() string {

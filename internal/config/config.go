@@ -37,7 +37,7 @@ const (
 	// Appended in checklist 02 (near real-time refresh). Keep at the end.
 	ActToggleAutoRefresh // ctrl+t: turn the background auto-refresh tick on/off
 	// Appended in checklist 03 (UI polish: themes + clean diff). Keep at the end.
-	ActThemePicker   // <leader> t: open the theme picker overlay (live preview)
+	ActThemePicker   // T (shift+t): open the theme picker overlay (live preview)
 	ActToggleRawDiff // ctrl+g: toggle showing the raw (unfiltered) diff
 	// Appended for the file-tree UX. Keep at the end.
 	ActCollapse    // h: collapse the folder under the cursor / go to parent
@@ -46,7 +46,9 @@ const (
 	ActFocusToggle // tab: move focus between the file tree and the diff contents
 	ActHideTree    // E (shift+e): hide/show the file-tree pane (diff full width)
 	// Appended for the commit section. Keep at the end.
-	ActCommit // C (shift+c): open the commit-message dialog and commit staged changes
+	ActCommit     // C (shift+c): open the commit-message dialog and commit staged changes
+	ActStageAll   // a: stage all unstaged + untracked files (git add -A)
+	ActUnstageAll // A (shift+a): unstage all staged files (git restore --staged .)
 )
 
 // Keymap maps keys/chords to actions. Leader is the chord prefix.
@@ -58,10 +60,12 @@ type Keymap struct {
 	chords map[string]Action
 }
 
-// DefaultKeymap returns the documented default bindings (leader = space).
+// DefaultKeymap returns the documented default bindings. Every action is a
+// direct key; shift+letter (e.g. B/T/P) replaces the former leader chords, so
+// there is no leader prefix to remember.
 func DefaultKeymap() Keymap {
 	return Keymap{
-		Leader: "space",
+		Leader: "",
 		direct: map[string]Action{
 			"q":      ActQuit,
 			"ctrl+c": ActQuit,
@@ -73,6 +77,8 @@ func DefaultKeymap() Keymap {
 			"up":     ActUp,
 			"enter":  ActConfirm,
 			"s":      ActStageToggle,
+			"a":      ActStageAll,
+			"A":      ActUnstageAll,
 			"u":      ActUndo,
 			"U":      ActUndoFile,
 			"ctrl+r": ActRecover,
@@ -90,13 +96,13 @@ func DefaultKeymap() Keymap {
 			"tab":    ActFocusToggle,
 			"E":      ActHideTree,
 			"C":      ActCommit,
+			"B":      ActBranchPanel,
+			"T":      ActThemePicker,
+			"P":      ActPRList,
 			"esc":    ActCancel,
 		},
-		chords: map[string]Action{
-			"b": ActBranchPanel,
-			"t": ActThemePicker,
-			"p": ActPRList,
-		},
+		// No leader chords: every action is a direct key (see DefaultKeymap doc).
+		chords: map[string]Action{},
 	}
 }
 
@@ -108,6 +114,8 @@ func (k Keymap) Bindings() []Binding {
 		{Keys: []string{"k", "up"}, Action: ActUp, Desc: "Move up (by line within a diff)"},
 		{Keys: []string{"enter"}, Action: ActConfirm, Desc: "Open / confirm"},
 		{Keys: []string{"s"}, Action: ActStageToggle, Desc: "Stage / unstage selected file"},
+		{Keys: []string{"a"}, Action: ActStageAll, Desc: "Stage all changed + untracked files"},
+		{Keys: []string{"A"}, Action: ActUnstageAll, Desc: "Unstage all staged files"},
 		{Keys: []string{"u"}, Action: ActUndo, Desc: "Discard the change under the cursor (hunk)"},
 		{Keys: []string{"U"}, Action: ActUndoFile, Desc: "Discard the whole file (confirm)"},
 		{Keys: []string{"ctrl+r"}, Action: ActRecover, Desc: "Recover the last discarded change"},
@@ -124,9 +132,9 @@ func (k Keymap) Bindings() []Binding {
 		{Keys: []string{"r"}, Action: ActRefresh, Desc: "Refresh status"},
 		{Keys: []string{"ctrl+t"}, Action: ActToggleAutoRefresh, Desc: "Toggle auto-refresh on/off"},
 		{Keys: []string{"ctrl+g"}, Action: ActToggleRawDiff, Desc: "Toggle raw / cleaned diff view"},
-		{Keys: []string{"<leader> b"}, Action: ActBranchPanel, Desc: "Open branch panel"},
-		{Keys: []string{"<leader> t"}, Action: ActThemePicker, Desc: "Open theme picker (live preview)"},
-		{Keys: []string{"<leader> p"}, Action: ActPRList, Desc: "Open merge/pull request list"},
+		{Keys: []string{"B"}, Action: ActBranchPanel, Desc: "Open branch panel"},
+		{Keys: []string{"T"}, Action: ActThemePicker, Desc: "Open theme picker (live preview)"},
+		{Keys: []string{"P"}, Action: ActPRList, Desc: "Open merge/pull request list"},
 		{Keys: []string{"?"}, Action: ActHelp, Desc: "Toggle help overlay"},
 		{Keys: []string{"esc"}, Action: ActCancel, Desc: "Cancel / close overlay"},
 		{Keys: []string{"q", "ctrl+c"}, Action: ActQuit, Desc: "Quit"},

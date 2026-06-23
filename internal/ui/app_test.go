@@ -75,13 +75,12 @@ func TestHelpToggle(t *testing.T) {
 	}
 }
 
-func TestBranchPanelLeaderChord(t *testing.T) {
+func TestBranchPanelShiftBinding(t *testing.T) {
 	a := newTestApp()
-	// Leader is space, then b => ActBranchPanel.
-	pressNamed(a, tea.KeySpace)
-	press(a, "b")
+	// B (shift+b) => ActBranchPanel (replaces the former space-leader chord).
+	press(a, "B")
 	if a.active != viewBranch {
-		t.Fatalf("space then b should open branch panel, got %v", a.active)
+		t.Fatalf("B should open branch panel, got %v", a.active)
 	}
 	// esc closes.
 	pressNamed(a, tea.KeyEsc)
@@ -149,6 +148,48 @@ func TestCommitDialogAcceptsTyping(t *testing.T) {
 	pressNamed(a, tea.KeyEscape)
 	if a.commit != nil {
 		t.Fatal("esc should close the commit dialog")
+	}
+}
+
+func TestStageAllNoopWhenNothingUnstaged(t *testing.T) {
+	a := newTestApp()
+	// Strip the unstaged + untracked files, leaving only a staged one.
+	a.status.Unstaged = nil
+	a.status.Untracked = nil
+	a.diff.SetStatus(a.status)
+
+	if cmd := a.stageAllCmd(); cmd != nil {
+		t.Fatal("stageAllCmd should be a no-op when nothing is unstaged")
+	}
+	if !strings.Contains(a.toast, "nothing to stage") {
+		t.Fatalf("expected a 'nothing to stage' toast, got %q", a.toast)
+	}
+}
+
+func TestStageAllReturnsCommandWhenChangesExist(t *testing.T) {
+	a := newTestApp() // has b.go unstaged + c.go untracked
+	if cmd := a.stageAllCmd(); cmd == nil {
+		t.Fatal("stageAllCmd should return a command when there are changes to stage")
+	}
+}
+
+func TestUnstageAllNoopWhenNothingStaged(t *testing.T) {
+	a := newTestApp()
+	a.status.Staged = nil
+	a.diff.SetStatus(a.status)
+
+	if cmd := a.unstageAllCmd(); cmd != nil {
+		t.Fatal("unstageAllCmd should be a no-op when nothing is staged")
+	}
+	if !strings.Contains(a.toast, "nothing to unstage") {
+		t.Fatalf("expected a 'nothing to unstage' toast, got %q", a.toast)
+	}
+}
+
+func TestUnstageAllReturnsCommandWhenStagedExists(t *testing.T) {
+	a := newTestApp() // has a.go staged
+	if cmd := a.unstageAllCmd(); cmd == nil {
+		t.Fatal("unstageAllCmd should return a command when there are staged files")
 	}
 }
 
@@ -523,11 +564,10 @@ func TestThemePickerLivePreviewAndRevert(t *testing.T) {
 	// so Open() records it and `j` has a different theme to preview.
 	styles.SetTheme("tokyonight")
 
-	// Open the picker via leader chord (space then t).
-	press(a, " ")
-	press(a, "t")
+	// Open the picker via the T (shift+t) binding.
+	press(a, "T")
 	if a.active != viewTheme {
-		t.Fatalf("space+t should open the theme picker, active=%v", a.active)
+		t.Fatalf("T should open the theme picker, active=%v", a.active)
 	}
 	opened := styles.ActiveTheme()
 
@@ -558,8 +598,7 @@ func TestThemePickerConfirmUpdatesConfig(t *testing.T) {
 	defer styles.SetTheme(styles.DefaultTheme)
 	a := newTestApp()
 	styles.SetTheme("tokyonight")
-	press(a, " ")
-	press(a, "t")
+	press(a, "T")
 	press(a, "j") // preview the next theme
 	chosen := styles.ActiveTheme()
 	pressNamed(a, tea.KeyEnter)

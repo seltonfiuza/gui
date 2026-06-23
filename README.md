@@ -99,6 +99,8 @@ Leader key defaults to **`Space`**.
 | `Esc`              | Return focus to the file list / close an overlay         |
 | `}` / `{`          | Jump to the next / previous hunk in the diff             |
 | `s`                | Stage or unstage the selected file                       |
+| `a` / `Shift+A`    | Stage all changed + untracked files / unstage all staged files |
+| `Shift+C`          | Commit staged changes (opens a commit-message dialog)    |
 | `u`                | Discard the **hunk under the cursor** (unstaged: reverse-apply; staged: unstage the hunk) |
 | `U`                | Discard the **whole file** (always confirms; `git restore` / `git clean` for untracked) |
 | `Ctrl+R`           | Recover the most recently discarded change (LIFO undo stack) |
@@ -106,8 +108,8 @@ Leader key defaults to **`Space`**.
 | `r`                | Refresh Git status (force an immediate reload)           |
 | `Ctrl+T`           | Toggle background auto-refresh on/off                    |
 | `Ctrl+G`           | Toggle the **raw** (unfiltered) diff vs. the cleaned view |
-| `<leader> b`       | Open the branch panel                                    |
-| `<leader> t`       | Open the **theme picker** (live preview)                 |
+| `Shift+B`          | Open the branch panel                                    |
+| `Shift+T`          | Open the **theme picker** (live preview)                 |
 | `?`                | Toggle the help / keymap overlay                         |
 | `q`                | Quit (warns if a git operation is in progress)           |
 | `Ctrl+C`           | Quit immediately                                         |
@@ -164,7 +166,7 @@ The cleanup is a **render-time transform only**: hunk operations (`u` discard,
 map keeping the cursor, hunk jumps, and discards byte-exact. Press **`Ctrl+G`**
 to toggle the full raw diff for debugging.
 
-### Themes (`<leader> t`)
+### Themes (`Shift+T`)
 
 A curated set of named themes, each a fully-populated color **palette** that is
 the single source of truth for every style the UI draws (header, group headers,
@@ -173,14 +175,14 @@ status glyphs, selection, diff add/remove/context/hunk, overlays, footer, toasts
 - **Tokyo Night** (default), **Catppuccin**, **Gruvbox**, **Nord**, **Solarized**,
   and a high-contrast **mono** fallback for 16-color / monochrome terminals.
 
-Press **`<leader> t`** to open the picker. Moving the selection (`j` / `k`)
+Press **`Shift+T`** to open the picker. Moving the selection (`j` / `k`)
 re-renders the **whole UI in that theme immediately** (live preview); `Enter`
 confirms and persists the choice, `Esc` reverts to the theme that was active when
 the picker opened. The selected theme is saved to the config file (`theme` key)
 and restored on the next launch. Truecolor values are downsampled automatically to
 the terminal's 256/16-color profile.
 
-### Branch panel (`<leader> b`)
+### Branch panel (`Shift+B`)
 
 A modal overlay listing **Local** branches (current marked `*`) and
 **Remote-tracking** branches.

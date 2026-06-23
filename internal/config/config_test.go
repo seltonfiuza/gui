@@ -5,8 +5,19 @@ import (
 	"testing"
 )
 
+// leaderKeymap builds a keymap that still uses the leader-chord mechanism so the
+// dispatcher's chord handling stays covered even though DefaultKeymap no longer
+// defines any chords (all actions are now direct shift+letter bindings).
+func leaderKeymap() Keymap {
+	return Keymap{
+		Leader: "space",
+		direct: map[string]Action{"q": ActQuit},
+		chords: map[string]Action{"b": ActBranchPanel},
+	}
+}
+
 func TestResolveLeaderChord(t *testing.T) {
-	d := NewDispatcher(DefaultKeymap())
+	d := NewDispatcher(leaderKeymap())
 
 	if got := d.Resolve("space"); got != ActNone {
 		t.Fatalf("Resolve(space) = %v, want ActNone", got)
@@ -23,7 +34,7 @@ func TestResolveLeaderChord(t *testing.T) {
 }
 
 func TestResolveLeaderUnmappedKey(t *testing.T) {
-	d := NewDispatcher(DefaultKeymap())
+	d := NewDispatcher(leaderKeymap())
 
 	d.Resolve("space")
 	if got := d.Resolve("z"); got != ActNone {
@@ -31,6 +42,28 @@ func TestResolveLeaderUnmappedKey(t *testing.T) {
 	}
 	if d.LeaderPending() {
 		t.Fatalf("LeaderPending() = true after unmapped chord key, want false")
+	}
+}
+
+// TestDefaultKeymapHasNoLeader verifies the standardized keymap: shift+letter
+// direct bindings replace the old space-leader chords, and space is inert.
+func TestDefaultKeymapHasNoLeader(t *testing.T) {
+	d := NewDispatcher(DefaultKeymap())
+	if got := d.Resolve("space"); got != ActNone {
+		t.Fatalf("Resolve(space) = %v, want ActNone", got)
+	}
+	if d.LeaderPending() {
+		t.Fatal("space must not arm a leader in the default keymap")
+	}
+	for key, want := range map[string]Action{
+		"B": ActBranchPanel,
+		"T": ActThemePicker,
+		"P": ActPRList,
+	} {
+		d := NewDispatcher(DefaultKeymap())
+		if got := d.Resolve(key); got != want {
+			t.Errorf("Resolve(%q) = %v, want %v", key, got, want)
+		}
 	}
 }
 
