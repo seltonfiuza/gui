@@ -27,6 +27,10 @@ func TestRenderMemoizes(t *testing.T) {
 	if r.Renders() != 2 {
 		t.Fatalf("Renders() = %d, want 2 (width change should miss)", r.Renders())
 	}
+	_ = r.Render("# B\n\nother", 60) // different markdown → miss
+	if r.Renders() != 3 {
+		t.Fatalf("Renders() = %d, want 3 (markdown change should miss)", r.Renders())
+	}
 }
 
 func TestRenderEmpty(t *testing.T) {
