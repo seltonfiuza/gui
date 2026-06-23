@@ -705,6 +705,32 @@ func (m *Model) LineCursor() int { return m.lineCursor }
 // Hunks returns the parsed hunks for the loaded diff.
 func (m *Model) Hunks() []git.Hunk { return m.hunks }
 
+// SourceLineAtCursor maps the diff line cursor to a 1-based line number in the
+// new (current) file. ok is false when the cursor is not on a blamable body line
+// (e.g. the @@ header or outside any hunk); removed is true when the cursor is on
+// a '-' line, which has no line in the current file.
+func (m *Model) SourceLineAtCursor() (line int, removed bool, ok bool) {
+	hi := git.HunkAtLine(m.hunks, m.lineCursor)
+	if hi < 0 {
+		return 0, false, false
+	}
+	h := m.hunks[hi]
+	bodyIdx := m.lineCursor - h.StartLine - 1
+	if bodyIdx < 0 || bodyIdx >= len(h.Body) {
+		return 0, false, false // the @@ header itself, or out of range
+	}
+	if strings.HasPrefix(h.Body[bodyIdx], "-") {
+		return 0, true, false
+	}
+	count := 0
+	for i := 0; i <= bodyIdx; i++ {
+		if !strings.HasPrefix(h.Body[i], "-") {
+			count++ // '+' and context lines advance the new-file counter
+		}
+	}
+	return h.NewStart + count - 1, false, true
+}
+
 // DiffRaw returns the raw diff text for the loaded path.
 func (m *Model) DiffRaw() string { return m.diffRaw }
 
