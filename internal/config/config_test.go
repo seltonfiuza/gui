@@ -365,3 +365,16 @@ func TestBindingsReflectCustomKeys(t *testing.T) {
 		t.Errorf("ActStageAll keys = %v, want to include the remapped \"g\"", keys)
 	}
 }
+
+func TestBlameLineBinding(t *testing.T) {
+	d := NewDispatcher(DefaultKeymap())
+	if got := d.Resolve("b"); got != ActBlameLine {
+		t.Fatalf("key b resolves to %v, want ActBlameLine", got)
+	}
+	if name := actionNames[ActBlameLine]; name != "blame_line" {
+		t.Fatalf("actionNames[ActBlameLine] = %q, want blame_line", name)
+	}
+	if got := actionByName["blame_line"]; got != ActBlameLine {
+		t.Fatalf("actionByName[blame_line] = %v, want ActBlameLine", got)
+	}
+}
