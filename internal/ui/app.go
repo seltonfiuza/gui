@@ -470,6 +470,53 @@ func (a *App) loadPRDetailCmd(number int) tea.Cmd {
 	}
 }
 
+// prCreatePrereqMsg carries the head (current branch) and base (origin default)
+// resolved off the UI goroutine before opening the create form.
+type prCreatePrereqMsg struct {
+	head, base string
+	err        error
+}
+
+// prCreateDoneMsg is the result of a create-request attempt.
+type prCreateDoneMsg struct {
+	pr  github.PR
+	err error
+}
+
+// prCreatePrereqCmd resolves the head branch and a prefilled base for the create
+// form. A failed default-branch lookup falls back to "main".
+func (a *App) prCreatePrereqCmd() tea.Cmd {
+	repo := a.repo
+	return func() tea.Msg {
+		head, err := repo.CurrentBranch()
+		if err != nil {
+			return prCreatePrereqMsg{err: err}
+		}
+		base, berr := repo.DefaultBranch()
+		if berr != nil || strings.TrimSpace(base) == "" {
+			base = "main"
+		}
+		return prCreatePrereqMsg{head: head, base: base}
+	}
+}
+
+// prCreateCmd pushes the head branch (set upstream) then creates the request.
+func (a *App) prCreateCmd(opts github.CreatePROpts) tea.Cmd {
+	repo := a.repo
+	remote := a.remote
+	return func() tea.Msg {
+		if remote == nil {
+			return prCreateDoneMsg{err: errors.New("no origin remote configured")}
+		}
+		if err := repo.PushSetUpstream(opts.Head); err != nil {
+			return prCreateDoneMsg{err: err}
+		}
+		svc := github.New(github.HostForRemote(remote))
+		pr, err := svc.CreatePR(remote, opts)
+		return prCreateDoneMsg{pr: pr, err: err}
+	}
+}
+
 // prTitle labels the request overlay per the origin host: GitLab uses "Merge
 // Requests", everything else "Pull Requests".
 func (a *App) prTitle() string {
@@ -570,6 +617,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.pr.SetDetail(msg.pr, msg.diff)
 		return a, nil
+
+	case prCreatePrereqMsg:
+		if msg.err != nil {
+			a.toast = "create request: " + msg.err.Error()
+			return a, nil
+		}
+		return a, a.pr.OpenCreate(msg.head, msg.base)
+
+	case prCreateDoneMsg:
+		if msg.err != nil {
+			a.pr.SetCreateError(msg.err.Error())
+			return a, nil
+		}
+		a.toast = fmt.Sprintf("created #%d", msg.pr.Number)
+		a.pr.BackToList()
+		return a, a.loadPRsCmd()
 
 	case diffMsg:
 		if msg.err != nil {
@@ -859,18 +922,25 @@ func (a *App) handleThemeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// handlePRKey routes a key to the request overlay. The panel reports an Intent:
-// close returns to the diff view; open-detail fetches the selected request.
+// handlePRKey routes a key to the request overlay. The panel reports an Intent
+// (and an optional cmd from a focused input): close returns to the diff view,
+// open-detail fetches a request, start-create gathers head/base, create runs the
+// push+create flow.
 func (a *App) handlePRKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	intent := a.pr.Update(msg)
+	intent, cmd := a.pr.Update(msg)
 	switch intent.Kind {
 	case prlist.IntentClose:
 		a.active = viewDiff
-		return a, nil
+		return a, cmd
 	case prlist.IntentOpenDetail:
-		return a, a.loadPRDetailCmd(intent.Number)
+		return a, tea.Batch(cmd, a.loadPRDetailCmd(intent.Number))
+	case prlist.IntentStartCreate:
+		return a, tea.Batch(cmd, a.prCreatePrereqCmd())
+	case prlist.IntentCreate:
+		a.toast = "creating request…"
+		return a, tea.Batch(cmd, a.prCreateCmd(intent.Opts))
 	}
-	return a, nil
+	return a, cmd
 }
 
 // handlePaletteKey routes a key to the command palette. Cancel closes it; Run
