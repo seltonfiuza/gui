@@ -174,3 +174,23 @@ func TestBindings(t *testing.T) {
 		}
 	}
 }
+
+func TestActionNameRoundTrip(t *testing.T) {
+	if len(actionNames) == 0 {
+		t.Fatal("actionNames is empty")
+	}
+	for act, name := range actionNames {
+		if got := actionByName[name]; got != act {
+			t.Errorf("actionByName[%q] = %v, want %v", name, got, act)
+		}
+	}
+}
+
+func TestActionByNameUnknown(t *testing.T) {
+	if _, ok := actionByName["definitely_not_an_action"]; ok {
+		t.Fatal("unknown action name unexpectedly resolved")
+	}
+	if actionByName["none"] != ActNone {
+		t.Fatalf("actionByName[none] = %v, want ActNone", actionByName["none"])
+	}
+}

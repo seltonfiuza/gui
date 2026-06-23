@@ -54,6 +54,53 @@ const (
 	ActCommandPalette // ctrl+p: open the fuzzy command palette (search all commands)
 )
 
+// actionNames maps each Action to its stable config name (used in config.yaml
+// `keys:` values). It is the single source of truth for action ↔ name; the
+// reverse map actionByName is derived from it. "none" is reserved (ActNone) to
+// let a config clear a default binding.
+var actionNames = map[Action]string{
+	ActNone:              "none",
+	ActQuit:              "quit",
+	ActRefresh:           "refresh",
+	ActHelp:              "help",
+	ActDown:              "down",
+	ActUp:                "up",
+	ActConfirm:           "confirm",
+	ActUndo:              "discard_hunk",
+	ActStageToggle:       "stage_toggle",
+	ActBranchPanel:       "branch_panel",
+	ActPRList:            "pr_list",
+	ActCancel:            "cancel",
+	ActUndoFile:          "discard_file",
+	ActRecover:           "recover",
+	ActPaneGrow:          "pane_grow",
+	ActPaneShrink:        "pane_shrink",
+	ActHunkNext:          "hunk_next",
+	ActHunkPrev:          "hunk_prev",
+	ActToggleAutoRefresh: "toggle_auto_refresh",
+	ActThemePicker:       "theme_picker",
+	ActToggleRawDiff:     "toggle_raw_diff",
+	ActCollapse:          "collapse",
+	ActExpand:            "expand",
+	ActToggleTree:        "toggle_tree",
+	ActFocusToggle:       "focus_toggle",
+	ActHideTree:          "hide_tree",
+	ActCommit:            "commit",
+	ActStageAll:          "stage_all",
+	ActUnstageAll:        "unstage_all",
+	ActPush:              "push",
+	ActCommandPalette:    "command_palette",
+}
+
+// actionByName is the reverse of actionNames, built once at init.
+var actionByName = func() map[string]Action {
+	m := make(map[string]Action, len(actionNames))
+	for a, n := range actionNames {
+		m[n] = a
+	}
+	return m
+}()
+
 // Keymap maps keys/chords to actions. Leader is the chord prefix.
 type Keymap struct {
 	Leader string
