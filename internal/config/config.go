@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Action is a resolved high-level user intent.
@@ -322,37 +324,90 @@ func configPath() (string, error) {
 	return filepath.Join(dir, "gui", "config.json"), nil
 }
 
-// Load reads the config file, returning defaults when absent.
-func Load() (Config, error) {
+// yamlConfigPath returns ~/.config/gui/config.yaml (literal ~/.config, the same
+// on macOS and Linux). It deliberately does not use os.UserConfigDir.
+func yamlConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "gui", "config.yaml"), nil
+}
+
+// applyDefaults fills empty preference fields from def.
+func applyDefaults(c *Config, def Config) {
+	if c.Leader == "" {
+		c.Leader = def.Leader
+	}
+	if c.Theme == "" {
+		c.Theme = def.Theme
+	}
+}
+
+// Load reads ~/.config/gui/config.yaml. When that file is absent it falls back
+// to the old JSON config (os.UserConfigDir()/gui/config.json), and finally to
+// built-in defaults. Recoverable problems (malformed YAML, unreadable file)
+// produce warnings rather than errors; the caller surfaces them to the user.
+func Load() (Config, []string, error) {
 	def := Config{Leader: "space", Theme: "tokyonight"}
+	var warns []string
+
+	yp, err := yamlConfigPath()
+	if err == nil {
+		data, rerr := os.ReadFile(yp)
+		switch {
+		case rerr == nil:
+			var c Config
+			if uerr := yaml.Unmarshal(data, &c); uerr != nil {
+				warns = append(warns, "config: invalid YAML in "+yp+", using defaults: "+uerr.Error())
+				return loadJSONFallback(def, warns)
+			}
+			applyDefaults(&c, def)
+			return c, warns, nil
+		case errors.Is(rerr, fs.ErrNotExist):
+			// fall through to JSON fallback
+		default:
+			warns = append(warns, "config: cannot read "+yp+": "+rerr.Error())
+		}
+	}
+	return loadJSONFallback(def, warns)
+}
+
+// loadJSONFallback reads the legacy JSON config, returning defaults when it is
+// absent. JSON is read-only: we never write it back.
+func loadJSONFallback(def Config, warns []string) (Config, []string, error) {
 	path, err := configPath()
 	if err != nil {
-		return def, err
+		return def, warns, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return def, nil
+			return def, warns, nil
 		}
-		return def, err
+		return def, warns, err
 	}
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
-		return def, err
+		warns = append(warns, "config: invalid JSON in "+path+", using defaults: "+err.Error())
+		return def, warns, nil
 	}
-	return c, nil
+	applyDefaults(&c, def)
+	return c, warns, nil
 }
 
-// Save writes the config file.
+// Save writes the config as YAML to ~/.config/gui/config.yaml, creating the
+// directory if needed. It round-trips keys and leader so persisting the theme
+// never drops the user's key overrides.
 func (c Config) Save() error {
-	path, err := configPath()
+	path, err := yamlConfigPath()
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
+	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}
