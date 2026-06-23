@@ -1,5 +1,5 @@
-// Package help renders the FR-4 keymap overlay built from
-// config.DefaultKeymap().Bindings().
+// Package help renders the keymap overlay built from the active keymap's
+// Bindings().
 package help
 
 import (
@@ -16,9 +16,9 @@ type Model struct {
 	bindings []config.Binding
 }
 
-// New builds the help overlay from the default keymap.
-func New() Model {
-	return Model{bindings: config.DefaultKeymap().Bindings()}
+// New builds the help overlay from the given (active) keymap bindings.
+func New(bindings []config.Binding) Model {
+	return Model{bindings: bindings}
 }
 
 // View renders the bordered keymap listing centered in the given area.

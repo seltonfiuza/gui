@@ -240,7 +240,7 @@ func TestCommandPaletteEscCloses(t *testing.T) {
 }
 
 func TestPaletteCommandsIncludeOpsExcludeNav(t *testing.T) {
-	cmds := paletteCommands()
+	cmds := paletteCommands(config.DefaultKeymap())
 	has := func(act config.Action) bool {
 		for _, c := range cmds {
 			if c.Action == act {
