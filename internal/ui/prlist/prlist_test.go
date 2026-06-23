@@ -92,9 +92,15 @@ func TestDescriptionRendersMarkdown(t *testing.T) {
 	m.Open("Pull Requests")
 	m.SetDetail(github.PR{Number: 1, Title: "t", Body: "# Heading\n\nSome body text."}, "")
 	m.mode = modeDetail
+	raw := m.View(120, 40)
+	// Glamour styling must survive into the rendered pane (guards against a
+	// regression that strips ANSI in production).
+	if !strings.Contains(raw, "\x1b[") {
+		t.Fatalf("expected ANSI styling in rendered description:\n%q", raw)
+	}
 	// Strip ANSI so substring checks aren't broken by glamour's per-span colour
 	// codes (which can split words like "body text" across escape sequences).
-	out := ansi.Strip(m.View(120, 40))
+	out := ansi.Strip(raw)
 	// The heading text survives markdown rendering (styling aside).
 	if !strings.Contains(out, "Heading") || !strings.Contains(out, "body text") {
 		t.Fatalf("description did not render markdown content:\n%s", out)
