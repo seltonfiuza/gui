@@ -5,9 +5,11 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Action is a resolved high-level user intent.
@@ -233,12 +235,82 @@ func (d *Dispatcher) Resolve(key string) Action {
 // LeaderPending reports whether the leader was pressed and awaits a chord key.
 func (d *Dispatcher) LeaderPending() bool { return d.leaderPending }
 
-// Config is persisted user preference.
+// Config is persisted user preference (YAML-primary; old JSON is read as a
+// fallback). Keys overrides bindings on top of DefaultKeymap().
 type Config struct {
-	Leader     string `json:"leader"`
-	GitHubHost string `json:"github_host"`
-	// Theme is the persisted UI theme preset name (see internal/ui/styles).
-	Theme string `json:"theme"`
+	Leader     string            `json:"leader" yaml:"leader"`
+	GitHubHost string            `json:"github_host" yaml:"github_host"`
+	Theme      string            `json:"theme" yaml:"theme"`
+	Keys       map[string]string `json:"keys,omitempty" yaml:"keys,omitempty"`
+}
+
+// normalizeConfigKey maps a config key string onto the names the keymap uses.
+// Only the space key needs translating (" " → "space"); everything else is
+// already in keymap form.
+func normalizeConfigKey(s string) string {
+	if s == " " {
+		return "space"
+	}
+	return s
+}
+
+// Keymap builds the active keymap by merging the config's Keys over
+// DefaultKeymap(). Each entry's value is an action name (see actionNames) or
+// "none" to clear that key. A key written "<leader> k" registers a chord on k.
+// The leader is left inert (empty) when no chords end up defined. Unknown
+// action names and empty chord keys are skipped and reported in the returned
+// warnings (never fatal).
+func (c Config) Keymap() (Keymap, []string) {
+	base := DefaultKeymap()
+	km := Keymap{
+		Leader: base.Leader,
+		direct: make(map[string]Action, len(base.direct)),
+		chords: make(map[string]Action, len(base.chords)),
+	}
+	for k, v := range base.direct {
+		km.direct[k] = v
+	}
+	for k, v := range base.chords {
+		km.chords[k] = v
+	}
+	if c.Leader != "" {
+		km.Leader = normalizeConfigKey(c.Leader)
+	}
+
+	var warns []string
+	for rawKey, name := range c.Keys {
+		act, ok := actionByName[name]
+		if !ok {
+			warns = append(warns, fmt.Sprintf("config: unknown action %q for key %q (ignored)", name, rawKey))
+			continue
+		}
+		key := normalizeConfigKey(rawKey)
+		if strings.HasPrefix(key, "<leader>") {
+			chordKey := strings.TrimSpace(key[len("<leader>"):])
+			if chordKey == "" {
+				warns = append(warns, fmt.Sprintf("config: empty leader chord for action %q (ignored)", name))
+				continue
+			}
+			if act == ActNone {
+				delete(km.chords, chordKey)
+			} else {
+				km.chords[chordKey] = act
+			}
+			continue
+		}
+		if act == ActNone {
+			delete(km.direct, key)
+		} else {
+			km.direct[key] = act
+		}
+	}
+
+	// The leader only matters if a chord exists; otherwise keep it inert so the
+	// leader key behaves as a normal (unbound) key.
+	if len(km.chords) == 0 {
+		km.Leader = ""
+	}
+	return km, warns
 }
 
 // configPath returns os.UserConfigDir()/gui/config.json.

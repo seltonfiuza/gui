@@ -140,7 +140,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got != want {
+	if got.Leader != want.Leader || got.GitHubHost != want.GitHubHost || got.Theme != want.Theme {
 		t.Fatalf("round trip = %+v, want %+v", got, want)
 	}
 }
@@ -192,5 +192,66 @@ func TestActionByNameUnknown(t *testing.T) {
 	}
 	if actionByName["none"] != ActNone {
 		t.Fatalf("actionByName[none] = %v, want ActNone", actionByName["none"])
+	}
+}
+
+func TestKeymapMergeOverDefaults(t *testing.T) {
+	c := Config{Keys: map[string]string{"g": "stage_all"}}
+	km, warns := c.Keymap()
+	if len(warns) != 0 {
+		t.Fatalf("warns = %v, want none", warns)
+	}
+	if got := NewDispatcher(km).Resolve("g"); got != ActStageAll {
+		t.Errorf("Resolve(g) = %v, want ActStageAll", got)
+	}
+	// An unlisted default survives the merge.
+	if got := NewDispatcher(km).Resolve("s"); got != ActStageToggle {
+		t.Errorf("Resolve(s) = %v, want ActStageToggle", got)
+	}
+}
+
+func TestKeymapNoneDisables(t *testing.T) {
+	c := Config{Keys: map[string]string{"s": "none"}}
+	km, _ := c.Keymap()
+	if got := NewDispatcher(km).Resolve("s"); got != ActNone {
+		t.Errorf("Resolve(s) = %v, want ActNone", got)
+	}
+}
+
+func TestKeymapLeaderChord(t *testing.T) {
+	c := Config{Leader: "space", Keys: map[string]string{"<leader> g": "stage_all"}}
+	km, _ := c.Keymap()
+	d := NewDispatcher(km)
+	if got := d.Resolve("space"); got != ActNone {
+		t.Fatalf("Resolve(space) = %v, want ActNone", got)
+	}
+	if !d.LeaderPending() {
+		t.Fatal("space did not arm leader despite a chord binding")
+	}
+	if got := d.Resolve("g"); got != ActStageAll {
+		t.Errorf("chord Resolve(g) = %v, want ActStageAll", got)
+	}
+}
+
+func TestKeymapUnknownActionWarns(t *testing.T) {
+	c := Config{Keys: map[string]string{"g": "frobnicate"}}
+	km, warns := c.Keymap()
+	if len(warns) == 0 {
+		t.Fatal("expected a warning for an unknown action name")
+	}
+	if got := NewDispatcher(km).Resolve("g"); got != ActNone {
+		t.Errorf("Resolve(g) = %v, want ActNone (bad binding ignored)", got)
+	}
+}
+
+func TestDefaultConfigLeaderInertWithoutChords(t *testing.T) {
+	c := Config{Leader: "space"} // leader set, but no chords
+	km, _ := c.Keymap()
+	d := NewDispatcher(km)
+	if got := d.Resolve("space"); got != ActNone {
+		t.Fatalf("Resolve(space) = %v, want ActNone", got)
+	}
+	if d.LeaderPending() {
+		t.Fatal("space armed leader despite no chord bindings")
 	}
 }
