@@ -99,6 +99,7 @@ type Model struct {
 	baseInput   textinput.Model
 	draft       bool
 	head        string
+	createNoun  string
 	createFocus createField
 	createNote  string
 	createErr   string
@@ -157,16 +158,17 @@ func (m *Model) SetDetailError(msg string) {
 
 // OpenCreate enters the create form with head shown read-only and base
 // prefilled (editable). Returns the cmd that focuses the title input.
-func (m *Model) OpenCreate(head, base string) tea.Cmd {
+func (m *Model) OpenCreate(head, base, noun string) tea.Cmd {
 	m.mode = modeCreate
 	m.head = head
+	m.createNoun = noun
 	m.draft = false
 	m.createFocus = fieldTitle
 	m.createNote = ""
 	m.createErr = ""
 
 	ti := textinput.New()
-	ti.Placeholder = "Pull request title"
+	ti.Placeholder = noun + " title"
 	m.titleInput = ti
 
 	ba := textinput.New()
@@ -447,7 +449,7 @@ func (m *Model) viewCreate(width, height int) string {
 	}
 
 	rows := []string{
-		styles.OverlayTitle.Render("New Pull Request"),
+		styles.OverlayTitle.Render("New " + m.createNoun),
 		"",
 		styles.Desc.Render("head: " + m.head),
 		"",

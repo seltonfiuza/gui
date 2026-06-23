@@ -21,7 +21,7 @@ func TestCreateFormOpensOnN(t *testing.T) {
 
 func TestCreateSubmitEmptyTitle(t *testing.T) {
 	m := New()
-	m.OpenCreate("feature", "main")
+	m.OpenCreate("feature", "main", "Pull Request")
 	intent, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	if intent.Kind != IntentNone {
 		t.Fatalf("empty-title submit kind = %v, want IntentNone", intent.Kind)
@@ -33,7 +33,7 @@ func TestCreateSubmitEmptyTitle(t *testing.T) {
 
 func TestCreateSubmitValid(t *testing.T) {
 	m := New()
-	m.OpenCreate("feature", "main")
+	m.OpenCreate("feature", "main", "Pull Request")
 	m.Update(runeKey('H'))
 	m.Update(runeKey('i'))
 	intent, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
@@ -53,7 +53,7 @@ func TestCreateSubmitValid(t *testing.T) {
 
 func TestCreateEscCancels(t *testing.T) {
 	m := New()
-	m.OpenCreate("feature", "main")
+	m.OpenCreate("feature", "main", "Pull Request")
 	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if m.mode != modeList {
 		t.Fatalf("after esc mode = %v, want modeList", m.mode)

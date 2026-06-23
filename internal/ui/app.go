@@ -526,6 +526,15 @@ func (a *App) prTitle() string {
 	return "Pull Requests"
 }
 
+// prNoun returns the singular request noun for the origin host: "Merge Request"
+// for GitLab, "Pull Request" otherwise.
+func (a *App) prNoun() string {
+	if a.remote != nil && strings.Contains(a.remote.Host, "gitlab") {
+		return "Merge Request"
+	}
+	return "Pull Request"
+}
+
 func (a *App) loadDiffCmd(path string, staged bool) tea.Cmd {
 	repo := a.repo
 	return func() tea.Msg {
@@ -620,10 +629,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case prCreatePrereqMsg:
 		if msg.err != nil {
-			a.toast = "create request: " + msg.err.Error()
+			a.toast = "create " + a.prNoun() + ": " + msg.err.Error()
 			return a, nil
 		}
-		return a, a.pr.OpenCreate(msg.head, msg.base)
+		return a, a.pr.OpenCreate(msg.head, msg.base, a.prNoun())
 
 	case prCreateDoneMsg:
 		if msg.err != nil {
