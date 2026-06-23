@@ -2,6 +2,7 @@ package prlist
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -66,7 +67,7 @@ func TestScrollDescriptionAt(t *testing.T) {
 	m.Open("Pull Requests")
 	body := ""
 	for i := 0; i < 100; i++ {
-		body += fmt.Sprintf("line %d\n", i)
+		body += fmt.Sprintf("line %d\n\n", i)
 	}
 	m.SetDetail(github.PR{Number: 1, Title: "t", Body: body}, "")
 	m.mode = modeDetail
@@ -85,12 +86,28 @@ func TestScrollDescriptionAt(t *testing.T) {
 	}
 }
 
+func TestDescriptionRendersMarkdown(t *testing.T) {
+	m := New()
+	m.Open("Pull Requests")
+	m.SetDetail(github.PR{Number: 1, Title: "t", Body: "# Heading\n\nSome body text."}, "")
+	m.mode = modeDetail
+	out := m.View(120, 40)
+	// The heading text survives markdown rendering (styling aside).
+	if !strings.Contains(out, "Heading") || !strings.Contains(out, "body text") {
+		t.Fatalf("description did not render markdown content:\n%s", out)
+	}
+	// The literal '#' markdown marker should be gone in the rendered heading.
+	if strings.Contains(out, "# Heading") {
+		t.Fatalf("expected markdown '#' to be rendered away:\n%s", out)
+	}
+}
+
 func TestDescriptionViewportScrolls(t *testing.T) {
 	m := New()
 	m.Open("Pull Requests")
 	body := ""
 	for i := 0; i < 100; i++ {
-		body += fmt.Sprintf("line %d\n", i)
+		body += fmt.Sprintf("line %d\n\n", i)
 	}
 	m.SetDetail(github.PR{Number: 1, Title: "t", Body: body}, "")
 	m.mode = modeDetail

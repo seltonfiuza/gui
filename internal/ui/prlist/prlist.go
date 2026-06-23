@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/seltonfiuza/gui/internal/github"
+	"github.com/seltonfiuza/gui/internal/ui/mdrender"
 	"github.com/seltonfiuza/gui/internal/ui/styles"
 )
 
@@ -97,6 +98,8 @@ type Model struct {
 	// used for mouse-wheel hit-testing.
 	descRectX, descRectY, descRectW, descRectH int
 
+	md *mdrender.Renderer // memoized markdown renderer for the description
+
 	// create form state
 	titleInput  textinput.Model
 	bodyInput   textarea.Model
@@ -111,7 +114,11 @@ type Model struct {
 
 // New builds an empty request panel.
 func New() Model {
-	return Model{title: "Pull Requests", descVP: viewport.New(0, 0)}
+	return Model{
+		title:  "Pull Requests",
+		descVP: viewport.New(0, 0),
+		md:     mdrender.New(),
+	}
 }
 
 // Open resets the panel into its loading state with the given title (e.g.
@@ -613,7 +620,7 @@ func (m *Model) descTitle() string {
 }
 
 // descriptionContent returns the description body rendered to width w as a
-// single string for the viewport. Task 5 replaces the body with markdown.
+// single string for the viewport.
 func (m *Model) descriptionContent(w int) string {
 	body := strings.TrimSpace(m.detail.Body)
 	if body == "" {
@@ -622,7 +629,10 @@ func (m *Model) descriptionContent(w int) string {
 	if w < 1 {
 		w = 1
 	}
-	return lipgloss.NewStyle().Width(w).Render(body)
+	if m.md == nil { // defensive: models built via zero-value
+		m.md = mdrender.New()
+	}
+	return m.md.Render(body, w)
 }
 
 // centered renders content in a single overlay box, centered in the area (used
