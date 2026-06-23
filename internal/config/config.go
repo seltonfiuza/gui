@@ -5,9 +5,14 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Action is a resolved high-level user intent.
@@ -53,6 +58,53 @@ const (
 	// Appended for the command palette. Keep at the end.
 	ActCommandPalette // ctrl+p: open the fuzzy command palette (search all commands)
 )
+
+// actionNames maps each Action to its stable config name (used in config.yaml
+// `keys:` values). It is the single source of truth for action ↔ name; the
+// reverse map actionByName is derived from it. "none" is reserved (ActNone) to
+// let a config clear a default binding.
+var actionNames = map[Action]string{
+	ActNone:              "none",
+	ActQuit:              "quit",
+	ActRefresh:           "refresh",
+	ActHelp:              "help",
+	ActDown:              "down",
+	ActUp:                "up",
+	ActConfirm:           "confirm",
+	ActUndo:              "discard_hunk",
+	ActStageToggle:       "stage_toggle",
+	ActBranchPanel:       "branch_panel",
+	ActPRList:            "pr_list",
+	ActCancel:            "cancel",
+	ActUndoFile:          "discard_file",
+	ActRecover:           "recover",
+	ActPaneGrow:          "pane_grow",
+	ActPaneShrink:        "pane_shrink",
+	ActHunkNext:          "hunk_next",
+	ActHunkPrev:          "hunk_prev",
+	ActToggleAutoRefresh: "toggle_auto_refresh",
+	ActThemePicker:       "theme_picker",
+	ActToggleRawDiff:     "toggle_raw_diff",
+	ActCollapse:          "collapse",
+	ActExpand:            "expand",
+	ActToggleTree:        "toggle_tree",
+	ActFocusToggle:       "focus_toggle",
+	ActHideTree:          "hide_tree",
+	ActCommit:            "commit",
+	ActStageAll:          "stage_all",
+	ActUnstageAll:        "unstage_all",
+	ActPush:              "push",
+	ActCommandPalette:    "command_palette",
+}
+
+// actionByName is the reverse of actionNames, built once at package load via an IIFE.
+var actionByName = func() map[string]Action {
+	m := make(map[string]Action, len(actionNames))
+	for a, n := range actionNames {
+		m[n] = a
+	}
+	return m
+}()
 
 // Keymap maps keys/chords to actions. Leader is the chord prefix.
 type Keymap struct {
@@ -111,41 +163,68 @@ func DefaultKeymap() Keymap {
 	}
 }
 
+// bindingOrder is the static display order and description for each action in
+// the help overlay / command palette. The actual keys are filled in from the
+// live keymap by Bindings(), so remapped keys show correctly.
+var bindingOrder = []struct {
+	Action Action
+	Desc   string
+}{
+	{ActDown, "Move down (by line within a diff)"},
+	{ActUp, "Move up (by line within a diff)"},
+	{ActConfirm, "Open / confirm"},
+	{ActStageToggle, "Stage / unstage selected file"},
+	{ActStageAll, "Stage all changed + untracked files"},
+	{ActUnstageAll, "Unstage all staged files"},
+	{ActUndo, "Discard the change under the cursor (hunk)"},
+	{ActUndoFile, "Discard the whole file (confirm)"},
+	{ActRecover, "Recover the last discarded change"},
+	{ActHunkNext, "Next hunk"},
+	{ActHunkPrev, "Previous hunk"},
+	{ActCollapse, "Collapse folder / go to parent"},
+	{ActExpand, "Expand folder / step in"},
+	{ActToggleTree, "Toggle folder tree / flat list"},
+	{ActFocusToggle, "Move focus: file tree ↔ diff contents"},
+	{ActHideTree, "Hide / show the file-tree pane"},
+	{ActCommit, "Commit staged changes (message dialog)"},
+	{ActPaneGrow, "Grow the diff pane"},
+	{ActPaneShrink, "Shrink the diff pane"},
+	{ActRefresh, "Refresh status"},
+	{ActToggleAutoRefresh, "Toggle auto-refresh on/off"},
+	{ActToggleRawDiff, "Toggle raw / cleaned diff view"},
+	{ActPush, "Push the current branch (git push)"},
+	{ActCommandPalette, "Open the command palette (fuzzy search)"},
+	{ActBranchPanel, "Open branch panel"},
+	{ActThemePicker, "Open theme picker (live preview)"},
+	{ActPRList, "Open merge/pull request list"},
+	{ActHelp, "Toggle help overlay"},
+	{ActCancel, "Cancel / close overlay"},
+	{ActQuit, "Quit"},
+}
+
 // Bindings returns the documented keybindings for the help overlay, in display
-// order.
+// order, with each binding's keys taken from this keymap (so custom configs are
+// reflected). Chords are rendered as "<leader> <key>".
 func (k Keymap) Bindings() []Binding {
-	return []Binding{
-		{Keys: []string{"j", "down"}, Action: ActDown, Desc: "Move down (by line within a diff)"},
-		{Keys: []string{"k", "up"}, Action: ActUp, Desc: "Move up (by line within a diff)"},
-		{Keys: []string{"enter"}, Action: ActConfirm, Desc: "Open / confirm"},
-		{Keys: []string{"s"}, Action: ActStageToggle, Desc: "Stage / unstage selected file"},
-		{Keys: []string{"a"}, Action: ActStageAll, Desc: "Stage all changed + untracked files"},
-		{Keys: []string{"A"}, Action: ActUnstageAll, Desc: "Unstage all staged files"},
-		{Keys: []string{"u"}, Action: ActUndo, Desc: "Discard the change under the cursor (hunk)"},
-		{Keys: []string{"U"}, Action: ActUndoFile, Desc: "Discard the whole file (confirm)"},
-		{Keys: []string{"ctrl+r"}, Action: ActRecover, Desc: "Recover the last discarded change"},
-		{Keys: []string{"}"}, Action: ActHunkNext, Desc: "Next hunk"},
-		{Keys: []string{"{"}, Action: ActHunkPrev, Desc: "Previous hunk"},
-		{Keys: []string{"h", "left"}, Action: ActCollapse, Desc: "Collapse folder / go to parent"},
-		{Keys: []string{"l", "right"}, Action: ActExpand, Desc: "Expand folder / step in"},
-		{Keys: []string{"."}, Action: ActToggleTree, Desc: "Toggle folder tree / flat list"},
-		{Keys: []string{"tab"}, Action: ActFocusToggle, Desc: "Move focus: file tree ↔ diff contents"},
-		{Keys: []string{"E"}, Action: ActHideTree, Desc: "Hide / show the file-tree pane"},
-		{Keys: []string{"C"}, Action: ActCommit, Desc: "Commit staged changes (message dialog)"},
-		{Keys: []string{">"}, Action: ActPaneGrow, Desc: "Grow the diff pane"},
-		{Keys: []string{"<"}, Action: ActPaneShrink, Desc: "Shrink the diff pane"},
-		{Keys: []string{"r"}, Action: ActRefresh, Desc: "Refresh status"},
-		{Keys: []string{"ctrl+t"}, Action: ActToggleAutoRefresh, Desc: "Toggle auto-refresh on/off"},
-		{Keys: []string{"ctrl+g"}, Action: ActToggleRawDiff, Desc: "Toggle raw / cleaned diff view"},
-		{Keys: []string{"p"}, Action: ActPush, Desc: "Push the current branch (git push)"},
-		{Keys: []string{"ctrl+p"}, Action: ActCommandPalette, Desc: "Open the command palette (fuzzy search)"},
-		{Keys: []string{"B"}, Action: ActBranchPanel, Desc: "Open branch panel"},
-		{Keys: []string{"T"}, Action: ActThemePicker, Desc: "Open theme picker (live preview)"},
-		{Keys: []string{"P"}, Action: ActPRList, Desc: "Open merge/pull request list"},
-		{Keys: []string{"?"}, Action: ActHelp, Desc: "Toggle help overlay"},
-		{Keys: []string{"esc"}, Action: ActCancel, Desc: "Cancel / close overlay"},
-		{Keys: []string{"q", "ctrl+c"}, Action: ActQuit, Desc: "Quit"},
+	byAction := map[Action][]string{}
+	for key, act := range k.direct {
+		byAction[act] = append(byAction[act], key)
 	}
+	for key, act := range k.chords {
+		disp := key
+		if k.Leader != "" {
+			disp = k.Leader + " " + key
+		}
+		byAction[act] = append(byAction[act], disp)
+	}
+	for act := range byAction {
+		sort.Strings(byAction[act])
+	}
+	out := make([]Binding, 0, len(bindingOrder))
+	for _, bi := range bindingOrder {
+		out = append(out, Binding{Keys: byAction[bi.Action], Action: bi.Action, Desc: bi.Desc})
+	}
+	return out
 }
 
 // Binding is one documented keybinding for the help overlay.
@@ -186,12 +265,82 @@ func (d *Dispatcher) Resolve(key string) Action {
 // LeaderPending reports whether the leader was pressed and awaits a chord key.
 func (d *Dispatcher) LeaderPending() bool { return d.leaderPending }
 
-// Config is persisted user preference.
+// Config is persisted user preference (YAML-primary; old JSON is read as a
+// fallback). Keys overrides bindings on top of DefaultKeymap().
 type Config struct {
-	Leader     string `json:"leader"`
-	GitHubHost string `json:"github_host"`
-	// Theme is the persisted UI theme preset name (see internal/ui/styles).
-	Theme string `json:"theme"`
+	Leader     string            `json:"leader" yaml:"leader"`
+	GitHubHost string            `json:"github_host" yaml:"github_host"`
+	Theme      string            `json:"theme" yaml:"theme"`
+	Keys       map[string]string `json:"keys,omitempty" yaml:"keys,omitempty"`
+}
+
+// normalizeConfigKey maps a config key string onto the names the keymap uses.
+// Only the space key needs translating (" " → "space"); everything else is
+// already in keymap form.
+func normalizeConfigKey(s string) string {
+	if s == " " {
+		return "space"
+	}
+	return s
+}
+
+// Keymap builds the active keymap by merging the config's Keys over
+// DefaultKeymap(). Each entry's value is an action name (see actionNames) or
+// "none" to clear that key. A key written "<leader> k" registers a chord on k.
+// The leader is left inert (empty) when no chords end up defined. Unknown
+// action names and empty chord keys are skipped and reported in the returned
+// warnings (never fatal).
+func (c Config) Keymap() (Keymap, []string) {
+	base := DefaultKeymap()
+	km := Keymap{
+		Leader: base.Leader,
+		direct: make(map[string]Action, len(base.direct)),
+		chords: make(map[string]Action, len(base.chords)),
+	}
+	for k, v := range base.direct {
+		km.direct[k] = v
+	}
+	for k, v := range base.chords {
+		km.chords[k] = v
+	}
+	if c.Leader != "" {
+		km.Leader = normalizeConfigKey(c.Leader)
+	}
+
+	var warns []string
+	for rawKey, name := range c.Keys {
+		act, ok := actionByName[name]
+		if !ok {
+			warns = append(warns, fmt.Sprintf("config: unknown action %q for key %q (ignored)", name, rawKey))
+			continue
+		}
+		key := normalizeConfigKey(strings.TrimSpace(rawKey))
+		if strings.HasPrefix(key, "<leader>") {
+			chordKey := strings.TrimSpace(key[len("<leader>"):])
+			if chordKey == "" {
+				warns = append(warns, fmt.Sprintf("config: empty leader chord for action %q (ignored)", name))
+				continue
+			}
+			if act == ActNone {
+				delete(km.chords, chordKey)
+			} else {
+				km.chords[chordKey] = act
+			}
+			continue
+		}
+		if act == ActNone {
+			delete(km.direct, key)
+		} else {
+			km.direct[key] = act
+		}
+	}
+
+	// The leader only matters if a chord exists; otherwise keep it inert so the
+	// leader key behaves as a normal (unbound) key.
+	if len(km.chords) == 0 {
+		km.Leader = ""
+	}
+	return km, warns
 }
 
 // configPath returns os.UserConfigDir()/gui/config.json.
@@ -203,37 +352,90 @@ func configPath() (string, error) {
 	return filepath.Join(dir, "gui", "config.json"), nil
 }
 
-// Load reads the config file, returning defaults when absent.
-func Load() (Config, error) {
+// yamlConfigPath returns ~/.config/gui/config.yaml (literal ~/.config, the same
+// on macOS and Linux). It deliberately does not use os.UserConfigDir.
+func yamlConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "gui", "config.yaml"), nil
+}
+
+// applyDefaults fills empty preference fields from def.
+func applyDefaults(c *Config, def Config) {
+	if c.Leader == "" {
+		c.Leader = def.Leader
+	}
+	if c.Theme == "" {
+		c.Theme = def.Theme
+	}
+}
+
+// Load reads ~/.config/gui/config.yaml. When that file is absent it falls back
+// to the old JSON config (os.UserConfigDir()/gui/config.json), and finally to
+// built-in defaults. Recoverable problems (malformed YAML, unreadable file)
+// produce warnings rather than errors; the caller surfaces them to the user.
+func Load() (Config, []string, error) {
 	def := Config{Leader: "space", Theme: "tokyonight"}
+	var warns []string
+
+	yp, err := yamlConfigPath()
+	if err == nil {
+		data, rerr := os.ReadFile(yp)
+		switch {
+		case rerr == nil:
+			var c Config
+			if uerr := yaml.Unmarshal(data, &c); uerr != nil {
+				warns = append(warns, "config: invalid YAML in "+yp+", using defaults: "+uerr.Error())
+				return loadJSONFallback(def, warns)
+			}
+			applyDefaults(&c, def)
+			return c, warns, nil
+		case errors.Is(rerr, fs.ErrNotExist):
+			// fall through to JSON fallback
+		default:
+			warns = append(warns, "config: cannot read "+yp+": "+rerr.Error())
+		}
+	}
+	return loadJSONFallback(def, warns)
+}
+
+// loadJSONFallback reads the legacy JSON config, returning defaults when it is
+// absent. JSON is read-only: we never write it back.
+func loadJSONFallback(def Config, warns []string) (Config, []string, error) {
 	path, err := configPath()
 	if err != nil {
-		return def, err
+		return def, warns, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return def, nil
+			return def, warns, nil
 		}
-		return def, err
+		return def, warns, err
 	}
 	var c Config
 	if err := json.Unmarshal(data, &c); err != nil {
-		return def, err
+		warns = append(warns, "config: invalid JSON in "+path+", using defaults: "+err.Error())
+		return def, warns, nil
 	}
-	return c, nil
+	applyDefaults(&c, def)
+	return c, warns, nil
 }
 
-// Save writes the config file.
+// Save writes the config as YAML to ~/.config/gui/config.yaml, creating the
+// directory if needed. It round-trips keys and leader so persisting the theme
+// never drops the user's key overrides.
 func (c Config) Save() error {
-	path, err := configPath()
+	path, err := yamlConfigPath()
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(c, "", "  ")
+	data, err := yaml.Marshal(c)
 	if err != nil {
 		return err
 	}

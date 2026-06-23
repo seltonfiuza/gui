@@ -112,6 +112,7 @@ type App struct {
 	repo       *git.Service
 	dispatcher *config.Dispatcher
 	cfg        config.Config
+	keymap     config.Keymap
 
 	status *git.Status
 	remote *git.Remote
@@ -185,14 +186,29 @@ type confirmState struct {
 }
 
 // commitState is the modal commit-message dialog: a single-line text input plus
-// the staged-file count shown for context. enter commits, esc cancels.
+// the staged-file count shown for context. enter commits, ctrl+a toggles amend,
+// esc cancels.
 type commitState struct {
-	input  textinput.Model
-	staged int
+	input    textinput.Model
+	staged   int
+	amend    bool   // when true, enter runs `git commit --amend`
+	canAmend bool   // a previous commit exists (set after lastCommitMsg arrives)
+	lastMsg  string // the previous commit's message, used to prefill on amend
+	note     string // inline validation hint (e.g. "nothing staged")
 }
 
 // commitDoneMsg is emitted after a commit attempt completes.
-type commitDoneMsg struct{ err error }
+type commitDoneMsg struct {
+	err   error
+	amend bool
+}
+
+// lastCommitMsg carries the previous commit's message (and whether one exists)
+// back to an open commit dialog so it can offer/prefill an amend.
+type lastCommitMsg struct {
+	message string
+	ok      bool
+}
 
 // pushDoneMsg is emitted after a push attempt completes.
 type pushDoneMsg struct{ err error }
@@ -201,25 +217,33 @@ type pushDoneMsg struct{ err error }
 // footer (pass "dev" for local builds). It loads persisted config and applies
 // the saved theme so the UI launches in the user's preferred colors.
 func New(repo *git.Service, version string) tea.Model {
-	cfg, _ := config.Load()
+	cfg, warns, _ := config.Load()
 	styles.SetTheme(cfg.Theme)
 	if version == "" {
 		version = "dev"
 	}
+	km, kwarns := cfg.Keymap()
+	warns = append(warns, kwarns...)
+	toast := ""
+	if len(warns) > 0 {
+		toast = warns[0]
+	}
 	return &App{
 		repo:        repo,
 		cfg:         cfg,
-		dispatcher:  config.NewDispatcher(config.DefaultKeymap()),
+		keymap:      km,
+		dispatcher:  config.NewDispatcher(km),
 		active:      viewDiff,
 		diff:        diffview.New(),
 		branch:      branchpanel.New(),
-		help:        help.New(),
+		help:        help.New(km.Bindings()),
 		theme:       themepicker.New(),
 		pr:          prlist.New(),
 		palette:     palette.New(),
 		listWidth:   defaultListWidth,
 		autoRefresh: true,
 		version:     version,
+		toast:       toast,
 	}
 }
 
@@ -584,10 +608,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.toast = msg.err.Error()
 			return a, nil
 		}
-		a.toast = "committed"
+		if msg.amend {
+			a.toast = "amended"
+		} else {
+			a.toast = "committed"
+		}
 		// Force the selected file's diff to reload — its staged content is gone.
 		a.forceDiffReload = true
 		return a, a.loadStatusCmd()
+
+	case lastCommitMsg:
+		// The async last-commit fetch resolved; let an open dialog offer amend.
+		if a.commit != nil {
+			a.commit.lastMsg = msg.message
+			a.commit.canAmend = msg.ok
+		}
+		return a, nil
 
 	case pushDoneMsg:
 		if msg.err != nil {
@@ -857,7 +893,7 @@ func (a *App) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // paletteCommands builds the palette's command list from the keymap bindings,
 // omitting pure navigation/cursor actions (and the palette itself) so it reads as
 // a menu of operations rather than movement keys.
-func paletteCommands() []palette.Command {
+func paletteCommands(km config.Keymap) []palette.Command {
 	skip := map[config.Action]bool{
 		config.ActNone:           true,
 		config.ActDown:           true,
@@ -874,7 +910,7 @@ func paletteCommands() []palette.Command {
 		config.ActCommandPalette: true,
 	}
 	var cmds []palette.Command
-	for _, b := range config.DefaultKeymap().Bindings() {
+	for _, b := range km.Bindings() {
 		if skip[b.Action] {
 			continue
 		}
@@ -1029,7 +1065,7 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 	case config.ActPush:
 		return a.confirmPush()
 	case config.ActCommandPalette:
-		a.palette.SetCommands(paletteCommands())
+		a.palette.SetCommands(paletteCommands(a.keymap))
 		a.active = viewPalette
 		return a, a.palette.Open()
 	case config.ActUndo:

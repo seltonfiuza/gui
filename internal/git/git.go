@@ -733,10 +733,24 @@ func (s *Service) Push() error {
 }
 
 // Commit records the staged changes as a new commit with the given message.
-// It does not stage anything itself, mirroring `git commit` — the message is
-// passed via stdin (-F -) so newlines and shell-significant characters survive.
+// It does not stage anything itself, mirroring `git commit`.
 func (s *Service) Commit(message string) error {
-	cmd := exec.Command("git", "commit", "-F", "-")
+	return s.commitWithMessage(message)
+}
+
+// AmendCommit replaces the previous commit (git commit --amend), using the given
+// message and the currently staged changes. With nothing staged it is a pure
+// reword; with staged changes they are folded into the previous commit.
+func (s *Service) AmendCommit(message string) error {
+	return s.commitWithMessage(message, "--amend")
+}
+
+// commitWithMessage runs `git commit [extraArgs...] -F -`, passing message via
+// stdin so newlines and shell-significant characters survive.
+func (s *Service) commitWithMessage(message string, extraArgs ...string) error {
+	args := append([]string{"commit"}, extraArgs...)
+	args = append(args, "-F", "-")
+	cmd := exec.Command("git", args...)
 	cmd.Dir = s.root
 	cmd.Stdin = strings.NewReader(message)
 	var out, stderr bytes.Buffer
@@ -753,6 +767,17 @@ func (s *Service) Commit(message string) error {
 		return fmt.Errorf("git commit: %s", msg)
 	}
 	return nil
+}
+
+// LastCommitMessage returns the full message (subject + body) of HEAD. It returns
+// an error when the repository has no commits yet, which callers use to decide
+// whether amending is possible.
+func (s *Service) LastCommitMessage() (string, error) {
+	out, err := s.run("log", "-1", "--pretty=%B")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(out, "\n"), nil
 }
 
 // RebaseInProgress reports whether a rebase is currently in progress.
