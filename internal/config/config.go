@@ -97,7 +97,7 @@ var actionNames = map[Action]string{
 	ActCommandPalette:    "command_palette",
 }
 
-// actionByName is the reverse of actionNames, built once at init.
+// actionByName is the reverse of actionNames, built once at package load via an IIFE.
 var actionByName = func() map[string]Action {
 	m := make(map[string]Action, len(actionNames))
 	for a, n := range actionNames {
@@ -314,7 +314,7 @@ func (c Config) Keymap() (Keymap, []string) {
 			warns = append(warns, fmt.Sprintf("config: unknown action %q for key %q (ignored)", name, rawKey))
 			continue
 		}
-		key := normalizeConfigKey(rawKey)
+		key := normalizeConfigKey(strings.TrimSpace(rawKey))
 		if strings.HasPrefix(key, "<leader>") {
 			chordKey := strings.TrimSpace(key[len("<leader>"):])
 			if chordKey == "" {

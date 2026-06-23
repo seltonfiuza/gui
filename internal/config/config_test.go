@@ -324,13 +324,13 @@ func TestKeymapLeaderChord(t *testing.T) {
 }
 
 func TestKeymapUnknownActionWarns(t *testing.T) {
-	c := Config{Keys: map[string]string{"g": "frobnicate"}}
+	c := Config{Keys: map[string]string{"s": "frobnicate"}}
 	km, warns := c.Keymap()
 	if len(warns) == 0 {
 		t.Fatal("expected a warning for an unknown action name")
 	}
-	if got := NewDispatcher(km).Resolve("g"); got != ActNone {
-		t.Errorf("Resolve(g) = %v, want ActNone (bad binding ignored)", got)
+	if got := NewDispatcher(km).Resolve("s"); got != ActStageToggle {
+		t.Errorf("Resolve(s) = %v, want ActStageToggle (default survives bad entry)", got)
 	}
 }
 
