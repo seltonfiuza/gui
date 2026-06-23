@@ -927,6 +927,41 @@ func TestHideTreeTogglesPane(t *testing.T) {
 	}
 }
 
+func TestBlameRemovedLineShowsNote(t *testing.T) {
+	a := New(&git.Service{}, "test").(*App)
+	a.active = viewDiff
+	a.width, a.height = 120, 40
+
+	// A diff whose cursor sits on a removed line.
+	raw := "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+	a.diff.SetDiff("f", raw)
+	a.diff.FocusDiff()
+	// Move the cursor onto the '-old' line (raw index 4).
+	for a.diff.LineCursor() != 4 {
+		before := a.diff.LineCursor()
+		a.diff.CursorDown()
+		if a.diff.LineCursor() == before {
+			break
+		}
+	}
+
+	a.dispatchAction(config.ActBlameLine)
+	if a.blame == nil {
+		t.Fatal("expected blame overlay to open")
+	}
+	if a.blame.note == "" {
+		t.Fatalf("expected a 'removed' note, got loading=%v entry=%+v", a.blame.loading, a.blame.entry)
+	}
+	if !a.overlayActive() {
+		t.Fatal("overlayActive() should be true with blame open")
+	}
+	// 'esc' closes it.
+	a.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if a.blame != nil {
+		t.Fatal("esc should close the blame overlay")
+	}
+}
+
 // TestFooterShowsVersion asserts the build version is rendered in the footer.
 func TestFooterShowsVersion(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
