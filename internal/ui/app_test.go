@@ -1048,8 +1048,28 @@ func TestEnterOnPROpensPRView(t *testing.T) {
 	a.prPanel.SetPRs([]github.PR{{Number: 13, Title: "x"}})
 	a.leftFocus = focusPRs
 	a.applyLeftFocus()
-	a.routeLeftKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := a.routeLeftKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if a.active != viewPR {
 		t.Errorf("expected active=viewPR after Enter on PR, got %v", a.active)
+	}
+	if cmd == nil {
+		t.Error("expected a command (loadPRDetailCmd) after activating a PR")
+	}
+}
+
+func TestEscWhileViewingCommitRestoresWorkingTreeDiff(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	a.dispatchAction(config.ActCancel)
+	if a.viewingCommit {
+		t.Error("Esc (ActCancel) should clear viewingCommit, restoring the working-tree diff")
+	}
+}
+
+func TestBgRefreshSuppressedWhileViewingCommit(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	if cmd := a.bgRefreshDiffCmd(); cmd != nil {
+		t.Error("bgRefreshDiffCmd should return nil while viewingCommit is true")
 	}
 }

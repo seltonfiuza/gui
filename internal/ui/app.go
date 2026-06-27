@@ -778,6 +778,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case bgDiffMsg:
+		// A poll diff-fetch that was already in flight when the user opened a
+		// commit view must not overwrite it.
+		if a.viewingCommit {
+			return a, nil
+		}
 		if msg.err != nil {
 			// Background diff errors are non-fatal and not toasted (the path may
 			// have just vanished); the next status tick reconciles.
