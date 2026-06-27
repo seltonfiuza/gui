@@ -291,7 +291,7 @@ func New(repo *git.Service, version string) tea.Model {
 // with no button) are delivered to Update — the latter drives hover highlights.
 func (a *App) Init() tea.Cmd {
 	a.prPanel.SetPlaceholder("loading…")
-	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), a.loadPRsCmd(), a.loadCommitsCmd(), scheduleTick(), tea.EnableMouseAllMotion)
+	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), a.loadCommitsCmd(), scheduleTick(), tea.EnableMouseAllMotion)
 }
 
 // ---- commands ----
@@ -701,10 +701,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.toast = "remote: " + msg.err.Error()
 			}
 			a.remote = nil
-			return a, nil
+			return a, a.loadPRsCmd()
 		}
 		a.remote = msg.remote
-		return a, nil
+		return a, a.loadPRsCmd()
 
 	case prsMsg:
 		if msg.err != nil {
@@ -938,7 +938,7 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case hitDiff:
 			a.diff.ScrollDiff(-3)
 		case hitList:
-			a.diff.FocusList()
+			a.setLeftFocus(focusFiles)
 			a.diff.SelectPrev()
 			return a, a.refreshDiffCmd()
 		}
@@ -948,7 +948,7 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case hitDiff:
 			a.diff.ScrollDiff(3)
 		case hitList:
-			a.diff.FocusList()
+			a.setLeftFocus(focusFiles)
 			a.diff.SelectNext()
 			return a, a.refreshDiffCmd()
 		}
@@ -992,12 +992,12 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if a.diff.Activate() {
 				return a, nil
 			}
-			a.diff.FocusList()
+			a.setLeftFocus(focusFiles)
 			return a, a.refreshDiffCmd()
 		}
 		return a, nil
 	case hitDiff:
-		a.diff.FocusDiff()
+		a.setLeftFocus(focusDiff)
 		a.diff.MoveCursorToRendered(h.line)
 		return a, a.refreshDiffCmd()
 	}
@@ -1260,7 +1260,7 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		if a.diff.Activate() {
 			return a, nil
 		}
-		a.diff.FocusDiff()
+		a.setLeftFocus(focusDiff)
 		return a, a.refreshDiffCmd()
 	case config.ActCancel:
 		// Return focus to the file list and restore the working-tree diff if a commit was shown.
@@ -1293,11 +1293,11 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		a.applyLayout()
 		return a, a.refreshDiffCmd()
 	case config.ActCollapse:
-		a.diff.FocusList()
+		a.setLeftFocus(focusFiles)
 		a.diff.Collapse()
 		return a, a.refreshDiffCmd()
 	case config.ActExpand:
-		a.diff.FocusList()
+		a.setLeftFocus(focusFiles)
 		a.diff.Expand()
 		return a, a.refreshDiffCmd()
 	case config.ActToggleTree:
@@ -1764,6 +1764,16 @@ func (a *App) applyLeftFocus() {
 	} else {
 		a.diff.FocusList()
 	}
+}
+
+// setLeftFocus updates the focused left-column region and reconciles the diff
+// view focus + panel highlight + rendering. Use this instead of calling
+// a.diff.FocusList()/FocusDiff() directly so keyboard routing never desyncs
+// from the visible focus.
+func (a *App) setLeftFocus(f leftFocus) {
+	a.leftFocus = f
+	a.applyLeftFocus()
+	a.syncLeftBlocks()
 }
 
 // routeLeftKey forwards a navigation/activation key to the focused bottom panel.

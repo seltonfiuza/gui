@@ -1137,3 +1137,22 @@ func TestNoRemoteShowsErrorInPRBlock(t *testing.T) {
 		t.Errorf("PR block should show the remote error, got:\n%s", a.prPanel.View())
 	}
 }
+
+func TestRemoteMsgTriggersPRLoad(t *testing.T) {
+	a := newTestApp()
+	_, cmd := a.Update(remoteMsg{remote: &git.Remote{Owner: "o", Repo: "r", Host: "github.com"}})
+	if cmd == nil {
+		t.Fatal("remoteMsg with a remote should trigger a PR load command (startup PR fetch)")
+	}
+}
+
+func TestWheelOverFileTreeResetsLeftFocusFromBlock(t *testing.T) {
+	a := newTestApp()
+	a.leftFocus = focusCommits
+	a.applyLeftFocus()
+	// Screen row 1 = body row 0 = top of the file tree.
+	a.handleMouse(tea.MouseMsg{X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if a.leftFocus != focusFiles {
+		t.Errorf("wheeling over the file tree should reset leftFocus to focusFiles, got %v", a.leftFocus)
+	}
+}
