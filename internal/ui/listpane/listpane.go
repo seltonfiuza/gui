@@ -102,9 +102,6 @@ func (m *Model) clamp() {
 	if m.offset > maxOffset {
 		m.offset = maxOffset
 	}
-	if m.offset < 0 {
-		m.offset = 0
-	}
 }
 
 // View renders exactly height lines: a title row then windowed rows, padded.

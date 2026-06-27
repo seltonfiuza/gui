@@ -57,4 +57,7 @@ func TestPlaceholderShownWhenEmpty(t *testing.T) {
 	if !strings.Contains(m.View(), "no items") {
 		t.Errorf("placeholder not shown:\n%s", m.View())
 	}
+	if got := len(strings.Split(m.View(), "\n")); got != 4 {
+		t.Errorf("empty View() lines = %d, want 4", got)
+	}
 }
