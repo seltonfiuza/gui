@@ -838,6 +838,32 @@ func TestBlameOverlaySwallowsMouse(t *testing.T) {
 	}
 }
 
+// TestWheelOverCommitBlockScrollsIt asserts wheeling over the commits block
+// scrolls it, rather than moving the file selection.
+func TestWheelOverCommitBlockScrollsIt(t *testing.T) {
+	a := newTestApp()
+	cs := make([]git.Commit, 10)
+	for i := range cs {
+		cs[i] = git.Commit{SHA: "s", Short: "s", Subject: "row" + string(rune('A'+i))}
+	}
+	a.commitPanel.SetCommits(cs)
+	// Pre-scroll to position 2 so that a subsequent ScrollBy(3) moves sel to 5,
+	// past the visible window edge (vis = leftBlockHeight-1 = 5), shifting the
+	// displayed rows from A-E to B-F and making before != after independent of
+	// ANSI color rendering.
+	a.commitPanel.ScrollBy(2)
+	a.applyLayout()
+	before := a.commitPanel.View()
+	// body-relative top of commits block + 2 → safely inside its rows; +1 to
+	// convert body→screen Y (header row).
+	screenY := a.commitBlockTopY() + 2 + 1
+	_, _ = a.handleMouse(tea.MouseMsg{X: 1, Y: screenY, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	after := a.commitPanel.View()
+	if before == after {
+		t.Errorf("wheel over commit block did not change its view\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
 // TestHoverHighlightsRowUnderPointer asserts mouse motion over a file row sets
 // the hover row, and motion outside the list clears it — without changing the
 // selection.

@@ -902,6 +902,26 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+		delta := -3
+		if msg.Button == tea.MouseButtonWheelDown {
+			delta = 3
+		}
+		if prTop, prBot, cTop, cBot, ok := a.leftBlockYRanges(); ok && msg.X < a.listWidth {
+			bodyY := msg.Y - 1 // header occupies screen row 0
+			switch {
+			case bodyY >= cTop && bodyY < cBot:
+				a.commitPanel.ScrollBy(delta)
+				a.syncLeftBlocks()
+				return a, nil
+			case bodyY >= prTop && bodyY < prBot:
+				a.prPanel.ScrollBy(delta)
+				a.syncLeftBlocks()
+				return a, nil
+			}
+		}
+	}
+
 	h := hitTest(a.currentLayout(), msg.X, msg.Y)
 
 	// Wheel scroll acts on whatever region is under the pointer: the diff pane
@@ -1689,6 +1709,28 @@ func (a *App) applyLayout() {
 
 // leftBlockHeight is the fixed row budget (incl. title) for each bottom panel.
 const leftBlockHeight = 6
+
+// leftBlockYRanges returns the body-relative [top,bottom) row ranges of the PR
+// and Commits blocks (bottom of the left column), or ok=false when the tree is
+// hidden. The Commits block is bottom-most; the PR block sits just above it.
+func (a *App) leftBlockYRanges() (prTop, prBot, cTop, cBot int, ok bool) {
+	if a.diff.ListHidden() {
+		return 0, 0, 0, 0, false
+	}
+	bodyH := a.bodyHeight()
+	cBot = bodyH
+	cTop = cBot - leftBlockHeight
+	prBot = cTop
+	prTop = prBot - leftBlockHeight
+	return prTop, prBot, cTop, cBot, true
+}
+
+// commitBlockTopY is the body-relative first row of the Commits block (used by
+// hit-testing and tests).
+func (a *App) commitBlockTopY() int {
+	_, _, cTop, _, _ := a.leftBlockYRanges()
+	return cTop
+}
 
 // syncLeftBlocks sizes the two panels to the list width and pushes their
 // rendered strings into the diff view's left column. When the file tree is
