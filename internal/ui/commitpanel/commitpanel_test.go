@@ -45,3 +45,10 @@ func TestEmptyShowsPlaceholder(t *testing.T) {
 		t.Errorf("placeholder missing:\n%s", m.View())
 	}
 }
+
+func TestRenderRowNarrowWidthNoPanic(t *testing.T) {
+	m := New()
+	m.SetSize(5, 4) // narrower than sha(7)+reltime(2)
+	m.SetCommits(sample())
+	_ = m.View() // must not panic
+}

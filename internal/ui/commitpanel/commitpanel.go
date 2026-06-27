@@ -42,6 +42,9 @@ func New() Model { return Model{pane: listpane.New("Commits")} }
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.pane.SetSize(width, height)
+	if len(m.commits) > 0 {
+		m.rebuildRows()
+	}
 }
 
 // SetFocused marks the block focused.
@@ -53,8 +56,14 @@ func (m *Model) SetPlaceholder(s string) { m.pane.SetPlaceholder(s) }
 // SetCommits replaces the commit list and rebuilds rows.
 func (m *Model) SetCommits(cs []git.Commit) {
 	m.commits = cs
-	rows := make([]string, len(cs))
-	for i, c := range cs {
+	m.rebuildRows()
+}
+
+// rebuildRows re-renders the commit rows for the current width and pushes them
+// into the underlying list pane. Called on data change and on resize.
+func (m *Model) rebuildRows() {
+	rows := make([]string, len(m.commits))
+	for i, c := range m.commits {
 		rows[i] = m.renderRow(c)
 	}
 	m.pane.SetRows(rows)
@@ -65,7 +74,7 @@ func (m *Model) renderRow(c git.Commit) string {
 	age := styles.Desc.Render(c.RelTime)
 	subj := c.Subject
 	// Reserve space for "sha  subject … age".
-	budget := m.width - ansi.StringWidth(c.Short) - ansi.StringWidth(c.RelTime) - 4
+	budget := m.width - ansi.StringWidth(c.Short) - ansi.StringWidth(c.RelTime) - 4 // 2 spaces separator + 1 min padding + 1 buffer
 	if budget < 1 {
 		budget = 1
 	}
