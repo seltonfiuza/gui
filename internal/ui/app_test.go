@@ -10,6 +10,7 @@ import (
 
 	"github.com/seltonfiuza/gui/internal/config"
 	"github.com/seltonfiuza/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/github"
 	"github.com/seltonfiuza/gui/internal/ui/diffview"
 	"github.com/seltonfiuza/gui/internal/ui/styles"
 )
@@ -1024,5 +1025,31 @@ func TestCommitsMsgPopulatesCommitPanel(t *testing.T) {
 	a.Update(commitsMsg{commits: cs})
 	if !strings.Contains(a.commitPanel.View(), "hello") {
 		t.Errorf("commit panel did not render commit after commitsMsg:\n%s", a.commitPanel.View())
+	}
+}
+
+func TestEnterOnCommitLoadsCommitDiffIntoPane(t *testing.T) {
+	a := newTestApp()
+	a.commitPanel.SetCommits([]git.Commit{{SHA: "deadbeef", Short: "deadbee", Subject: "x"}})
+	a.leftFocus = focusCommits
+	a.applyLeftFocus()
+	_, cmd := a.routeLeftKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a command to fetch the commit diff")
+	}
+	a.Update(commitDiffMsg{sha: "deadbeef", raw: "diff --git a/x b/x\n+content\n"})
+	if !a.viewingCommit {
+		t.Error("expected viewingCommit=true after loading a commit diff")
+	}
+}
+
+func TestEnterOnPROpensPRView(t *testing.T) {
+	a := newTestApp()
+	a.prPanel.SetPRs([]github.PR{{Number: 13, Title: "x"}})
+	a.leftFocus = focusPRs
+	a.applyLeftFocus()
+	a.routeLeftKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if a.active != viewPR {
+		t.Errorf("expected active=viewPR after Enter on PR, got %v", a.active)
 	}
 }
