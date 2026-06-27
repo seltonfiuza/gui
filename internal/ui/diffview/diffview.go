@@ -96,6 +96,8 @@ type Model struct {
 	listWidth   int
 	totalWidth  int
 	totalHeight int
+
+	leftBlocks []string // pre-rendered extra left-column blocks (pr/commits)
 }
 
 // New builds an empty diff panel.
@@ -119,6 +121,22 @@ func (m *Model) CommitBarHeight() int {
 		return commitBarLines
 	}
 	return 0
+}
+
+// SetLeftBlocks sets extra pre-rendered blocks stacked beneath the commit bar in
+// the left column. Each string should already be sized to listWidth.
+func (m *Model) SetLeftBlocks(blocks []string) { m.leftBlocks = blocks }
+
+// leftBlocksHeight is the total screen rows the extra blocks occupy.
+func (m *Model) leftBlocksHeight() int {
+	h := 0
+	for _, b := range m.leftBlocks {
+		if b == "" {
+			continue
+		}
+		h += strings.Count(b, "\n") + 1
+	}
+	return h
 }
 
 // SetHoverRow sets the visible-node index under the mouse pointer (-1 for none).
@@ -1009,6 +1027,12 @@ func (m *Model) View() string {
 	if m.commitBarVisible() {
 		leftCol = lipgloss.JoinVertical(lipgloss.Left, list, m.renderCommitBar())
 	}
+	for _, b := range m.leftBlocks {
+		if b == "" {
+			continue
+		}
+		leftCol = lipgloss.JoinVertical(lipgloss.Left, leftCol, b)
+	}
 	gap := styles.Divider.Render(verticalBar(m.totalHeight))
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftCol, gap, diff, sb)
 }
@@ -1029,6 +1053,10 @@ func (m *Model) listHeight() int {
 	h := m.totalHeight
 	if m.commitBarVisible() {
 		h -= commitBarLines
+	}
+	h -= m.leftBlocksHeight()
+	if h < 1 {
+		h = 1
 	}
 	return h
 }

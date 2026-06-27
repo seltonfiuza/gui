@@ -450,3 +450,19 @@ func TestFlatModeShowsFullPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestSetLeftBlocksAppearInView(t *testing.T) {
+	m := New()
+	m.SetSize(80, 20, 24)
+	// Give it minimal non-clean status so View renders the list column.
+	m.SetStatus(&git.Status{
+		Unstaged: []git.ChangedFile{
+			{Path: "foo.go", Worktree: git.Modified},
+		},
+	})
+	m.SetLeftBlocks([]string{"BLOCK-ONE-MARKER", "BLOCK-TWO-MARKER"})
+	out := m.View()
+	if !strings.Contains(out, "BLOCK-ONE-MARKER") || !strings.Contains(out, "BLOCK-TWO-MARKER") {
+		t.Errorf("left blocks not rendered in View:\n%s", out)
+	}
+}
