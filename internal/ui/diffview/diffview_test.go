@@ -466,3 +466,40 @@ func TestSetLeftBlocksAppearInView(t *testing.T) {
 		t.Errorf("left blocks not rendered in View:\n%s", out)
 	}
 }
+
+// TestCleanStateStillShowsLeftBlocks asserts that with a clean working tree the
+// left column (and its PR / Commits blocks) is still rendered, rather than the
+// whole view collapsing to the centered "all caught up" message.
+func TestCleanStateStillShowsLeftBlocks(t *testing.T) {
+	m := New()
+	m.SetSize(80, 20, 24)
+	m.SetStatus(&git.Status{}) // clean: no changes
+	if !m.IsClean() {
+		t.Fatal("status with no changes should be clean")
+	}
+	m.SetLeftBlocks([]string{"BLOCK-ONE-MARKER", "BLOCK-TWO-MARKER"})
+	out := m.View()
+	if !strings.Contains(out, "BLOCK-ONE-MARKER") || !strings.Contains(out, "BLOCK-TWO-MARKER") {
+		t.Errorf("clean state dropped the left blocks:\n%s", out)
+	}
+	if !strings.Contains(out, "working tree clean") {
+		t.Errorf("clean state should still show the friendly message:\n%s", out)
+	}
+}
+
+// TestCleanStateWithTreeHiddenIsFullWidth asserts the clean message still fills
+// the width (no left column) when the file tree is hidden.
+func TestCleanStateWithTreeHiddenIsFullWidth(t *testing.T) {
+	m := New()
+	m.SetSize(80, 20, 24)
+	m.SetStatus(&git.Status{})
+	m.SetListHidden(true)
+	m.SetLeftBlocks([]string{"BLOCK-ONE-MARKER"})
+	out := m.View()
+	if strings.Contains(out, "BLOCK-ONE-MARKER") {
+		t.Errorf("blocks should not render when the tree is hidden:\n%s", out)
+	}
+	if !strings.Contains(out, "working tree clean") {
+		t.Errorf("clean state should show the friendly message:\n%s", out)
+	}
+}

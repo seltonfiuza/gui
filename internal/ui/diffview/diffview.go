@@ -1013,7 +1013,7 @@ func glyph(g Group, f git.ChangedFile) string {
 // list is hidden, the diff (plus scrollbar) fills the whole width.
 func (m *Model) View() string {
 	if m.IsClean() {
-		return m.renderCleanState()
+		return m.renderClean()
 	}
 
 	diff := m.renderDiff()
@@ -1022,6 +1022,13 @@ func (m *Model) View() string {
 		return lipgloss.JoinHorizontal(lipgloss.Top, diff, sb)
 	}
 
+	gap := styles.Divider.Render(verticalBar(m.totalHeight))
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderLeftColumn(), gap, diff, sb)
+}
+
+// renderLeftColumn builds the left column: the scrollable file list, the commit
+// affordance, and any stacked left blocks (the PR / Commits panels).
+func (m *Model) renderLeftColumn() string {
 	list := lipgloss.NewStyle().Width(m.listWidth).Height(m.listHeight()).Render(m.renderList())
 	leftCol := list
 	if m.commitBarVisible() {
@@ -1033,8 +1040,7 @@ func (m *Model) View() string {
 		}
 		leftCol = lipgloss.JoinVertical(lipgloss.Left, leftCol, b)
 	}
-	gap := styles.Divider.Render(verticalBar(m.totalHeight))
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftCol, gap, diff, sb)
+	return leftCol
 }
 
 // commitBarLines is the number of screen rows the commit affordance occupies at
@@ -1091,13 +1097,31 @@ func (m *Model) renderCommitBar() string {
 	return rule + "\n" + line
 }
 
-// renderCleanState renders the friendly "working tree clean" empty state.
-func (m *Model) renderCleanState() string {
+// renderClean renders the friendly "working tree clean" empty state. When the
+// file-tree column is visible it is still drawn, so the PR / Commits blocks stay
+// usable, and the message fills the diff side; when the tree is hidden the
+// message is centered across the full width.
+func (m *Model) renderClean() string {
+	msg := m.cleanMessage()
+	if m.listHidden {
+		return lipgloss.Place(maxi(m.totalWidth, 1), maxi(m.totalHeight, 1),
+			lipgloss.Center, lipgloss.Center, msg)
+	}
+	gap := styles.Divider.Render(verticalBar(m.totalHeight))
+	rightWidth := m.totalWidth - m.listWidth - lipgloss.Width(gap)
+	if rightWidth < 1 {
+		rightWidth = 1
+	}
+	right := lipgloss.Place(rightWidth, maxi(m.totalHeight, 1),
+		lipgloss.Center, lipgloss.Center, msg)
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderLeftColumn(), gap, right)
+}
+
+// cleanMessage is the centered "all caught up" content for the clean state.
+func (m *Model) cleanMessage() string {
 	title := styles.GroupStaged.Render("✓ working tree clean")
 	hint := styles.Clean.Render("nothing to commit — you're all caught up")
-	msg := lipgloss.JoinVertical(lipgloss.Center, title, "", hint)
-	return lipgloss.Place(maxi(m.totalWidth, 1), maxi(m.totalHeight, 1),
-		lipgloss.Center, lipgloss.Center, msg)
+	return lipgloss.JoinVertical(lipgloss.Center, title, "", hint)
 }
 
 // renderScrollbar draws a one-column vertical scrollbar for the diff viewport: a

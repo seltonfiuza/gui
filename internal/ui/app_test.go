@@ -1156,3 +1156,17 @@ func TestWheelOverFileTreeResetsLeftFocusFromBlock(t *testing.T) {
 		t.Errorf("wheeling over the file tree should reset leftFocus to focusFiles, got %v", a.leftFocus)
 	}
 }
+
+// TestClickingFileResetsLeftFocusFromBlock guards against keyboard routing
+// sticking to a bottom panel after the user clicks a file in the tree: the click
+// must move focus back to the file list so j/k act on the selection again.
+func TestClickingFileResetsLeftFocusFromBlock(t *testing.T) {
+	a := newTestApp()
+	a.leftFocus = focusCommits
+	a.applyLeftFocus()
+	// Left-click a file row in the tree (b.go's row -> screen y=5).
+	a.handleMouse(tea.MouseMsg{X: 2, Y: 5, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if a.leftFocus != focusFiles {
+		t.Errorf("clicking a file should reset leftFocus to focusFiles, got %v", a.leftFocus)
+	}
+}
