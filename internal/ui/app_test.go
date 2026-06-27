@@ -1017,3 +1017,12 @@ func TestTabCyclesLeftFocusFilesPRsCommitsDiff(t *testing.T) {
 		t.Errorf("after 4 tabs = %v, want focusFiles (wrap)", a.leftFocus)
 	}
 }
+
+func TestCommitsMsgPopulatesCommitPanel(t *testing.T) {
+	a := newTestApp()
+	cs := []git.Commit{{SHA: "abc123def", Short: "abc123d", Subject: "hello", RelTime: "2h"}}
+	a.Update(commitsMsg{commits: cs})
+	if !strings.Contains(a.commitPanel.View(), "hello") {
+		t.Errorf("commit panel did not render commit after commitsMsg:\n%s", a.commitPanel.View())
+	}
+}

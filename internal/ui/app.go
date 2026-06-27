@@ -287,7 +287,8 @@ func New(repo *git.Service, version string) tea.Model {
 // and enables all-motion mouse tracking so clicks/scroll/drag AND hover (motion
 // with no button) are delivered to Update — the latter drives hover highlights.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), scheduleTick(), tea.EnableMouseAllMotion)
+	a.prPanel.SetPlaceholder("loading…")
+	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), a.loadPRsCmd(), a.loadCommitsCmd(), scheduleTick(), tea.EnableMouseAllMotion)
 }
 
 // ---- commands ----
@@ -377,7 +378,7 @@ func (a *App) handleBgStatus(msg bgStatusMsg) (tea.Model, tea.Cmd) {
 	a.status = msg.status
 	a.statusFP = fp
 	a.diff.SetStatus(msg.status)
-	return a, tea.Batch(next, a.bgRefreshDiffCmd())
+	return a, tea.Batch(next, a.bgRefreshDiffCmd(), a.loadCommitsCmd())
 }
 
 // bgRefreshDiffCmd re-fetches the selected file's diff for a background refresh.
@@ -470,6 +471,23 @@ func (a *App) loadRemoteCmd() tea.Cmd {
 	return func() tea.Msg {
 		r, err := repo.OriginRemote()
 		return remoteMsg{remote: r, err: err}
+	}
+}
+
+// commitLogLimit caps how many commits the Commits block reads.
+const commitLogLimit = 50
+
+type commitsMsg struct {
+	commits []git.Commit
+	err     error
+}
+
+// loadCommitsCmd reads the recent commit log off the UI thread.
+func (a *App) loadCommitsCmd() tea.Cmd {
+	repo := a.repo
+	return func() tea.Msg {
+		cs, err := repo.Log(commitLogLimit)
+		return commitsMsg{commits: cs, err: err}
 	}
 }
 
@@ -665,6 +683,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, nil
 		}
 		a.pr.SetPRs(msg.prs)
+		return a, nil
+
+	case commitsMsg:
+		if msg.err == nil {
+			a.commitPanel.SetCommits(msg.commits)
+			if len(msg.commits) == 0 {
+				a.commitPanel.SetPlaceholder("no commits yet")
+			}
+		}
+		a.syncLeftBlocks()
 		return a, nil
 
 	case prDetailMsg:
@@ -1137,7 +1165,7 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		return a, nil
 	case config.ActRefresh:
 		a.toast = ""
-		return a, a.loadStatusCmd()
+		return a, tea.Batch(a.loadStatusCmd(), a.loadPRsCmd(), a.loadCommitsCmd())
 	case config.ActToggleAutoRefresh:
 		a.autoRefresh = !a.autoRefresh
 		if a.autoRefresh {
