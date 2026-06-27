@@ -882,6 +882,15 @@ func humanizeAge(t time.Time) string {
 	}
 }
 
+// CommitDiff returns the unified diff for a single commit (`git show`), suitable
+// for read-only display in the diff pane.
+func (s *Service) CommitDiff(sha string) (string, error) {
+	if strings.TrimSpace(sha) == "" {
+		return "", errors.New("empty commit sha")
+	}
+	return s.run("show", "--no-color", sha)
+}
+
 // RebaseInProgress reports whether a rebase is currently in progress.
 func (s *Service) RebaseInProgress() (bool, error) {
 	out, err := s.run("rev-parse", "--git-dir")

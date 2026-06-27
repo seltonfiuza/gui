@@ -969,3 +969,24 @@ func TestLogEmptyRepoReturnsNoCommits(t *testing.T) {
 		t.Fatalf("empty repo returned %d commits, want 0", len(commits))
 	}
 }
+
+func TestCommitDiffShowsCommitChanges(t *testing.T) {
+	requireGit(t)
+	dir := newRepo(t)
+	writeFile(t, dir, "hello.txt", "hello world\n")
+	runGit(t, dir, "-C", dir, "add", "hello.txt")
+	runGit(t, dir, "-C", dir, "commit", "-m", "add hello")
+
+	s := &Service{root: dir}
+	commits, err := s.Log(1)
+	if err != nil || len(commits) == 0 {
+		t.Fatalf("Log setup failed: %v (%d)", err, len(commits))
+	}
+	diff, err := s.CommitDiff(commits[0].SHA)
+	if err != nil {
+		t.Fatalf("CommitDiff: %v", err)
+	}
+	if !strings.Contains(diff, "hello.txt") || !strings.Contains(diff, "+hello world") {
+		t.Errorf("diff missing expected content:\n%s", diff)
+	}
+}
