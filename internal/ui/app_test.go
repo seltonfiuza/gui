@@ -1099,3 +1099,32 @@ func TestBgRefreshSuppressedWhileViewingCommit(t *testing.T) {
 		t.Error("bgRefreshDiffCmd should return nil while viewingCommit is true")
 	}
 }
+
+func TestWheelOverFileTreeStillMovesSelection(t *testing.T) {
+	a := newTestApp()
+	before := a.diff.SelectedPath()
+	// Screen row 1 = body row 0, which is the top of the file tree (above the
+	// PR/Commits blocks): the wheel must move the file selection, not a block.
+	a.handleMouse(tea.MouseMsg{X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if a.diff.SelectedPath() == before {
+		t.Errorf("wheel over file tree should still move file selection (got %q both before and after)", before)
+	}
+}
+
+func TestWheelOverPRBlockScrollsIt(t *testing.T) {
+	a := newTestApp()
+	prs := make([]github.PR, 10)
+	for i := range prs {
+		prs[i] = github.PR{Number: i + 1, Title: "pr" + string(rune('A'+i))}
+	}
+	a.prPanel.SetPRs(prs)
+	a.applyLayout()
+	before := a.prPanel.View()
+	// PR block body-relative top = commitBlockTopY() - leftBlockHeight; +2 inside
+	// its rows, +1 to convert body→screen Y.
+	screenY := a.commitBlockTopY() - 6 + 2 + 1
+	a.handleMouse(tea.MouseMsg{X: 1, Y: screenY, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if a.prPanel.View() == before {
+		t.Errorf("wheel over PR block did not change its view")
+	}
+}

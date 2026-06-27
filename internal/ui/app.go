@@ -1718,6 +1718,11 @@ func (a *App) leftBlockYRanges() (prTop, prBot, cTop, cBot int, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 	bodyH := a.bodyHeight()
+	if bodyH < 2*leftBlockHeight {
+		// Not enough room for both blocks; don't intercept (keep the file list
+		// wheel-scrollable).
+		return 0, 0, 0, 0, false
+	}
 	cBot = bodyH
 	cTop = cBot - leftBlockHeight
 	prBot = cTop
