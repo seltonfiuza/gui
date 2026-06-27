@@ -930,7 +930,7 @@ func TestLogReturnsRecentCommitsNewestFirst(t *testing.T) {
 	if commits[0].Subject != "add b" {
 		t.Errorf("newest subject = %q, want %q", commits[0].Subject, "add b")
 	}
-	if len(commits[0].Short) == 0 || len(commits[0].Short) >= len(commits[0].SHA) {
+	if len(commits[0].Short) == 0 || len(commits[0].Short) >= len(commits[0].SHA) || !strings.HasPrefix(commits[0].SHA, commits[0].Short) {
 		t.Errorf("Short %q should be a prefix shorter than SHA %q", commits[0].Short, commits[0].SHA)
 	}
 	if commits[0].When.IsZero() || commits[0].RelTime == "" {
@@ -953,5 +953,19 @@ func TestLogRespectsLimit(t *testing.T) {
 	}
 	if len(commits) != 2 {
 		t.Fatalf("limit 2 returned %d commits", len(commits))
+	}
+}
+
+func TestLogEmptyRepoReturnsNoCommits(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	s := &Service{root: dir}
+	commits, err := s.Log(10)
+	if err != nil {
+		t.Fatalf("Log on empty repo: %v", err)
+	}
+	if len(commits) != 0 {
+		t.Fatalf("empty repo returned %d commits, want 0", len(commits))
 	}
 }

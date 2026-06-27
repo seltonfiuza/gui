@@ -826,9 +826,9 @@ func (s *Service) Log(n int) ([]Commit, error) {
 	format := strings.Join([]string{"%H", "%h", "%an", "%at", "%s"}, logFieldSep)
 	out, err := s.run("log", "--no-color", "-n", strconv.Itoa(n), "--pretty=format:"+format)
 	if err != nil {
-		// A repo with no commits yet makes `git log` fail; treat as empty.
-		if strings.Contains(err.Error(), "does not have any commits") ||
-			strings.Contains(err.Error(), "bad default revision") {
+		// No commits yet (unborn HEAD): rev-parse --verify HEAD fails. Any other
+		// error is a real failure.
+		if _, headErr := s.run("rev-parse", "--verify", "HEAD"); headErr != nil {
 			return nil, nil
 		}
 		return nil, err
