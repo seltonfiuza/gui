@@ -22,10 +22,12 @@ import (
 	"github.com/seltonfiuza/gui/internal/git"
 	"github.com/seltonfiuza/gui/internal/github"
 	"github.com/seltonfiuza/gui/internal/ui/branchpanel"
+	"github.com/seltonfiuza/gui/internal/ui/commitpanel"
 	"github.com/seltonfiuza/gui/internal/ui/diffview"
 	"github.com/seltonfiuza/gui/internal/ui/help"
 	"github.com/seltonfiuza/gui/internal/ui/palette"
 	"github.com/seltonfiuza/gui/internal/ui/prlist"
+	"github.com/seltonfiuza/gui/internal/ui/prpanel"
 	"github.com/seltonfiuza/gui/internal/ui/styles"
 	"github.com/seltonfiuza/gui/internal/ui/themepicker"
 )
@@ -40,6 +42,16 @@ const (
 	viewTheme
 	viewPR
 	viewPalette
+)
+
+// leftFocus tracks which left-column region (or the diff) has keyboard focus.
+type leftFocus int
+
+const (
+	focusFiles leftFocus = iota
+	focusPRs
+	focusCommits
+	focusDiff
 )
 
 // ---- messages returned by git commands ----
@@ -117,13 +129,16 @@ type App struct {
 	status *git.Status
 	remote *git.Remote
 
-	active  view
-	diff    diffview.Model
-	branch  branchpanel.Model
-	help    help.Model
-	theme   themepicker.Model
-	pr      prlist.Model
-	palette palette.Model
+	active      view
+	diff        diffview.Model
+	branch      branchpanel.Model
+	help        help.Model
+	theme       themepicker.Model
+	pr          prlist.Model
+	palette     palette.Model
+	prPanel     prpanel.Model
+	commitPanel commitpanel.Model
+	leftFocus   leftFocus
 
 	// dragging is true while the user holds the mouse on the divider to resize.
 	dragging bool
@@ -259,6 +274,8 @@ func New(repo *git.Service, version string) tea.Model {
 		theme:       themepicker.New(),
 		pr:          prlist.New(),
 		palette:     palette.New(),
+		prPanel:     prpanel.New(),
+		commitPanel: commitpanel.New(),
 		listWidth:   defaultListWidth,
 		autoRefresh: true,
 		version:     version,
@@ -1148,17 +1165,16 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		a.diff.FocusList()
 		return a, nil
 	case config.ActFocusToggle:
-		// Tab moves focus between the file tree and the diff contents. With the
-		// tree hidden there's nothing to focus but the diff, so it's a no-op.
 		if a.diff.ListHidden() {
 			return a, nil
 		}
-		if a.diff.Focus() == diffview.FocusDiff {
-			a.diff.FocusList()
-			return a, nil
+		a.leftFocus = (a.leftFocus + 1) % 4
+		a.applyLeftFocus()
+		a.syncLeftBlocks()
+		if a.leftFocus == focusDiff {
+			return a, a.refreshDiffCmd()
 		}
-		a.diff.FocusDiff()
-		return a, a.refreshDiffCmd()
+		return a, nil
 	case config.ActHideTree:
 		hidden := !a.diff.ListHidden()
 		a.diff.SetListHidden(hidden)
@@ -1586,6 +1602,35 @@ const (
 func (a *App) applyLayout() {
 	a.listWidth = diffview.ClampListWidth(a.width, a.listWidth)
 	a.diff.SetSize(a.width, a.bodyHeight(), a.listWidth)
+	a.syncLeftBlocks()
+}
+
+// leftBlockHeight is the fixed row budget (incl. title) for each bottom panel.
+const leftBlockHeight = 6
+
+// syncLeftBlocks sizes the two panels to the list width and pushes their
+// rendered strings into the diff view's left column. When the file tree is
+// hidden there is no left column, so the blocks are cleared.
+func (a *App) syncLeftBlocks() {
+	if a.diff.ListHidden() || a.listWidth <= 0 {
+		a.diff.SetLeftBlocks(nil)
+		return
+	}
+	a.prPanel.SetSize(a.listWidth, leftBlockHeight)
+	a.commitPanel.SetSize(a.listWidth, leftBlockHeight)
+	a.diff.SetLeftBlocks([]string{a.prPanel.View(), a.commitPanel.View()})
+}
+
+// applyLeftFocus reflects a.leftFocus into the diff view and the two panels so
+// exactly one region shows the active selection style.
+func (a *App) applyLeftFocus() {
+	a.prPanel.SetFocused(a.leftFocus == focusPRs)
+	a.commitPanel.SetFocused(a.leftFocus == focusCommits)
+	if a.leftFocus == focusDiff {
+		a.diff.FocusDiff()
+	} else {
+		a.diff.FocusList()
+	}
 }
 
 // growDiff shrinks the file list (grows the diff pane) by one step, clamped.

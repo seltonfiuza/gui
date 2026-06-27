@@ -899,13 +899,23 @@ func TestTabTogglesFocusBetweenTreeAndDiff(t *testing.T) {
 	if a.diff.Focus() != diffview.FocusList {
 		t.Fatalf("focus should start on the file list")
 	}
-	pressNamed(a, tea.KeyTab)
-	if a.diff.Focus() != diffview.FocusDiff {
-		t.Fatalf("tab should move focus to the diff contents")
-	}
-	pressNamed(a, tea.KeyTab)
+	// Four-way cycle: Files → PRs → Commits → Diff → Files
+	// First three tabs keep list focus (PRs and Commits are in the left column).
+	pressNamed(a, tea.KeyTab) // focusPRs
 	if a.diff.Focus() != diffview.FocusList {
-		t.Fatalf("tab again should move focus back to the file tree")
+		t.Fatalf("tab 1 (focusPRs) should keep list focus")
+	}
+	pressNamed(a, tea.KeyTab) // focusCommits
+	if a.diff.Focus() != diffview.FocusList {
+		t.Fatalf("tab 2 (focusCommits) should keep list focus")
+	}
+	pressNamed(a, tea.KeyTab) // focusDiff
+	if a.diff.Focus() != diffview.FocusDiff {
+		t.Fatalf("tab 3 (focusDiff) should move focus to the diff contents")
+	}
+	pressNamed(a, tea.KeyTab) // focusFiles
+	if a.diff.Focus() != diffview.FocusList {
+		t.Fatalf("tab 4 (focusFiles) should return focus to the list")
 	}
 }
 
@@ -982,5 +992,28 @@ func TestFooterShowsVersion(t *testing.T) {
 	a.version = "v1.2.3"
 	if !strings.Contains(a.renderFooter(), "v1.2.3") {
 		t.Fatalf("footer should show the version, got: %q", a.renderFooter())
+	}
+}
+
+func TestTabCyclesLeftFocusFilesPRsCommitsDiff(t *testing.T) {
+	a := newTestApp()
+	if a.leftFocus != focusFiles {
+		t.Fatalf("initial leftFocus = %v, want focusFiles", a.leftFocus)
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.leftFocus != focusPRs {
+		t.Errorf("after 1 tab = %v, want focusPRs", a.leftFocus)
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.leftFocus != focusCommits {
+		t.Errorf("after 2 tabs = %v, want focusCommits", a.leftFocus)
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.leftFocus != focusDiff {
+		t.Errorf("after 3 tabs = %v, want focusDiff", a.leftFocus)
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.leftFocus != focusFiles {
+		t.Errorf("after 4 tabs = %v, want focusFiles (wrap)", a.leftFocus)
 	}
 }
