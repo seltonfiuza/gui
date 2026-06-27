@@ -90,7 +90,7 @@ Leader key defaults to **`Space`**.
 |--------------------|----------------------------------------------------------|
 | `j` / `↓`          | Move down — file selection (list focus) or **diff line cursor** (diff focus) |
 | `k` / `↑`          | Move up — file selection or diff line cursor             |
-| `Tab`              | Move focus between the **file tree** and the **diff contents** |
+| `Tab`              | Cycle focus: **file tree** → **Pull Requests** → **Commits** → **diff contents** |
 | `Enter`            | On a file: focus the diff pane (j/k then move by line). On a folder: collapse/expand it |
 | `h` / `←`          | Collapse the folder under the cursor, or jump to its parent |
 | `l` / `→`          | Expand the folder under the cursor, or step into it       |
@@ -200,6 +200,28 @@ A modal overlay listing **Local** branches (current marked `*`) and
 
 Delete (when unmerged) and rebase require explicit confirmation. Rebase
 conflicts surface an inline message; resolve them with the `git` CLI.
+
+### Pull Requests & Commits blocks
+
+The bottom-left corner of the **file tree** column contains two scrollable panels
+stacked below the file list:
+
+- **Pull Requests** lists the open PRs for the current repository, fetched via `gh`
+  (GitHub) or `glab` (GitLab) in the background at startup and on `r`.
+- **Commits** shows recent `git log` history.
+
+Press `Tab` to move focus through the four-way cycle: **file tree → Pull Requests →
+Commits → diff contents**. When a panel is focused, `j` / `k` scroll its rows; the
+mouse wheel also scrolls whichever block the pointer hovers over regardless of
+keyboard focus.
+
+Press `Enter` on a PR to open the full-screen **PR detail view** (description,
+diff, and the create-PR workflow). Press `Enter` on a commit to load that commit's
+diff into the main pane; press `Esc` to return to the working-tree diff.
+
+If there is no remote, `gh` / `glab` isn't installed, or you haven't authenticated,
+the **Pull Requests** block shows a short status message (for example, "no origin
+remote configured") instead of silently failing or erroring out.
 
 ## Development
 

@@ -709,9 +709,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case prsMsg:
 		if msg.err != nil {
 			a.pr.SetError(msg.err.Error())
+			a.prPanel.SetError(msg.err.Error())
+			a.syncLeftBlocks()
 			return a, nil
 		}
 		a.pr.SetPRs(msg.prs)
+		a.prPanel.SetPRs(msg.prs)
+		a.syncLeftBlocks()
 		return a, nil
 
 	case commitsMsg:

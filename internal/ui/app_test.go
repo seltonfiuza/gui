@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -1126,5 +1127,13 @@ func TestWheelOverPRBlockScrollsIt(t *testing.T) {
 	a.handleMouse(tea.MouseMsg{X: 1, Y: screenY, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
 	if a.prPanel.View() == before {
 		t.Errorf("wheel over PR block did not change its view")
+	}
+}
+
+func TestNoRemoteShowsErrorInPRBlock(t *testing.T) {
+	a := newTestApp()
+	a.Update(prsMsg{err: errors.New("no origin remote configured")})
+	if !strings.Contains(a.prPanel.View(), "no") {
+		t.Errorf("PR block should show the remote error, got:\n%s", a.prPanel.View())
 	}
 }
