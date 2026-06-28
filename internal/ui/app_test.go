@@ -1247,3 +1247,45 @@ func TestRightWhileScrollingCommitDiffStaysInCommitView(t *testing.T) {
 		t.Errorf("→ while scrolling a commit diff should stay put (viewingCommit=%v leftFocus=%v)", a.viewingCommit, a.leftFocus)
 	}
 }
+
+func TestEditFileNoSelection(t *testing.T) {
+	a := newTestApp()
+	a.status = &git.Status{Branch: "main"} // no files
+	a.diff.SetStatus(a.status)
+	_, cmd := a.dispatchAction(config.ActEditFile)
+	if cmd != nil {
+		t.Fatalf("expected no command when nothing is selected")
+	}
+	if a.toast != "nothing to edit" {
+		t.Fatalf("toast = %q, want %q", a.toast, "nothing to edit")
+	}
+}
+
+func TestEditFileMissingFile(t *testing.T) {
+	a := newTestApp() // selected file defaults to a stub path that is not on disk
+	_, cmd := a.dispatchAction(config.ActEditFile)
+	if cmd != nil {
+		t.Fatalf("expected no command when the file is missing on disk")
+	}
+	if a.toast != "nothing to edit — file is gone" {
+		t.Fatalf("toast = %q, want %q", a.toast, "nothing to edit — file is gone")
+	}
+}
+
+func TestEditFileExistingFileReturnsCommand(t *testing.T) {
+	a := newTestApp()
+	// Point the selection at a file that exists in this package's directory so
+	// the os.Stat guard passes. The returned command is not executed here.
+	a.status = &git.Status{
+		Branch:   "main",
+		Unstaged: []git.ChangedFile{{Path: "app.go", Worktree: git.Modified}},
+	}
+	a.diff.SetStatus(a.status)
+	_, cmd := a.dispatchAction(config.ActEditFile)
+	if cmd == nil {
+		t.Fatalf("expected a command when the selected file exists")
+	}
+	if a.toast != "" {
+		t.Fatalf("toast = %q, want empty", a.toast)
+	}
+}

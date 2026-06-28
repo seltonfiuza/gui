@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -100,6 +101,12 @@ type branchesMsg struct {
 // the user asks to quit (FR-4: warn before quitting mid-operation).
 type quitCheckMsg struct {
 	inProgress bool
+}
+
+// editorFinishedMsg is delivered when the external editor opened by
+// ActEditFile exits. It carries any process error and triggers a refresh.
+type editorFinishedMsg struct {
+	err error
 }
 
 // mutationDoneMsg is emitted after a stage/unstage/discard/checkout/etc.
@@ -856,6 +863,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Quit
 
+	case editorFinishedMsg:
+		if msg.err != nil {
+			a.toast = "editor exited with error"
+		}
+		// The file may have changed on disk; force the diff to reload and
+		// refresh the working-tree status so edits show immediately.
+		a.forceDiffReload = true
+		return a, tea.Batch(a.loadStatusCmd(), a.refreshDiffCmd())
+
 	case tea.MouseMsg:
 		return a.handleMouse(msg)
 
@@ -1334,6 +1350,25 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 	case config.ActHunkPrev:
 		a.diff.HunkPrev()
 		return a, nil
+	case config.ActEditFile:
+		row, ok := a.diff.Selected()
+		if !ok {
+			a.toast = "nothing to edit"
+			return a, nil
+		}
+		abs := filepath.Join(a.repo.Root(), row.File.Path)
+		if _, err := os.Stat(abs); err != nil {
+			a.toast = "nothing to edit — file is gone"
+			return a, nil
+		}
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "vim"
+		}
+		a.toast = ""
+		return a, tea.ExecProcess(exec.Command(editor, abs), func(err error) tea.Msg {
+			return editorFinishedMsg{err: err}
+		})
 	case config.ActBlameLine:
 		if a.diff.Focus() != diffview.FocusDiff {
 			a.toast = "blame: focus the diff first"
