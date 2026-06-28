@@ -40,6 +40,7 @@ type ChangedFile struct {
 // Status is the parsed result of `git status`.
 type Status struct {
 	Branch    string
+	OID       string // HEAD commit hash, or "(initial)" on an unborn branch
 	Upstream  string
 	Ahead     int
 	Behind    int
@@ -172,6 +173,8 @@ func parseStatus(out string) (*Status, error) {
 
 func parseHeader(h string, st *Status) {
 	switch {
+	case strings.HasPrefix(h, "branch.oid "):
+		st.OID = strings.TrimPrefix(h, "branch.oid ")
 	case strings.HasPrefix(h, "branch.head "):
 		v := strings.TrimPrefix(h, "branch.head ")
 		if v == "(detached)" {
