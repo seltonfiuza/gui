@@ -1180,3 +1180,20 @@ func TestClickingFileResetsLeftFocusFromBlock(t *testing.T) {
 		t.Errorf("clicking a file should reset leftFocus to focusFiles, got %v", a.leftFocus)
 	}
 }
+
+func TestEnterOnPRBlockOpensDetailNotList(t *testing.T) {
+	a := newTestApp()
+	a.prPanel.SetPRs([]github.PR{{Number: 7, Title: "x"}})
+	a.leftFocus = focusPRs
+	a.applyLeftFocus()
+	_, cmd := a.routeLeftKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if a.active != viewPR {
+		t.Fatalf("expected active=viewPR after activating a PR from the block")
+	}
+	if cmd == nil {
+		t.Fatal("expected a command batch (list + detail load)")
+	}
+	if out := a.pr.View(80, 24); strings.Contains(out, "n new") {
+		t.Errorf("block activation should open the PR detail, not the list:\n%s", out)
+	}
+}

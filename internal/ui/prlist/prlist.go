@@ -132,6 +132,23 @@ func (m *Model) Open(title string) {
 	m.mode = modeList
 }
 
+// OpenDetail opens the panel straight into a PR's detail view in its loading
+// state. Used when a PR is activated from the bottom-left block rather than
+// selected from the list, so the modal shows the detail "loading…" (then the
+// description/diff) instead of the empty list.
+func (m *Model) OpenDetail(title string) {
+	m.title = title
+	m.errMsg = ""
+	m.mode = modeDetail
+	m.detailDiff = ""
+	m.detailLoading = true
+	m.detailErr = ""
+	m.focus = focusDiff
+	m.detailScroll = 0
+	m.descVP.GotoTop()
+	m.diffLines = nil
+}
+
 // SetPRs populates the list and clears the loading/error state.
 func (m *Model) SetPRs(prs []github.PR) {
 	m.prs = prs
@@ -151,8 +168,11 @@ func (m *Model) SetError(msg string) {
 	m.loading = false
 }
 
-// SetDetail populates the detail screen with a request and its diff.
+// SetDetail populates the detail screen with a request and its diff. It also
+// switches the panel into detail mode so a detail loaded directly (e.g. from the
+// bottom-left block) is shown rather than left behind the list.
 func (m *Model) SetDetail(pr github.PR, diff string) {
+	m.mode = modeDetail
 	m.detail = pr
 	m.detailDiff = diff
 	m.detailLoading = false

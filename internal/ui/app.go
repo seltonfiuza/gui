@@ -1786,8 +1786,10 @@ func (a *App) routeLeftKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		a.syncLeftBlocks()
 		if intent.Kind == prpanel.IntentActivate {
 			a.active = viewPR
-			a.pr.Open(a.prTitle())
-			return a, a.loadPRDetailCmd(intent.Number)
+			// Open straight into the PR's detail (loading), and load the list
+			// behind it so Esc returns to a populated list.
+			a.pr.OpenDetail(a.prTitle())
+			return a, tea.Batch(a.loadPRsCmd(), a.loadPRDetailCmd(intent.Number))
 		}
 		return a, nil
 	case focusCommits:
