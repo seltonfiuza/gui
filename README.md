@@ -216,8 +216,10 @@ mouse wheel also scrolls whichever block the pointer hovers over regardless of
 keyboard focus.
 
 Press `Enter` on a PR to open the full-screen **PR detail view** (description,
-diff, and the create-PR workflow). Press `Enter` on a commit to load that commit's
-diff into the main pane; press `Esc` to return to the working-tree diff.
+diff, and the create-PR workflow). On the **Commits** panel, `Enter` loads the
+selected commit's diff into the main pane, and `→` (or `l`) loads it **and** moves
+focus into the diff so `j` / `k` scroll the changes; `←` (or `h`) returns focus to
+the commit list, and `Esc` returns to the working-tree diff.
 
 If there is no remote, `gh` / `glab` isn't installed, or you haven't authenticated,
 the **Pull Requests** block shows a short status message (for example, "no origin

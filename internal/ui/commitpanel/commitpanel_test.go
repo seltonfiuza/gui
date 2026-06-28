@@ -52,3 +52,13 @@ func TestRenderRowNarrowWidthNoPanic(t *testing.T) {
 	m.SetCommits(sample())
 	_ = m.View() // must not panic
 }
+
+func TestSelectedReturnsHighlightedCommit(t *testing.T) {
+	m := New()
+	m.SetSize(40, 4)
+	m.SetCommits(sample())
+	c, ok := m.Selected()
+	if !ok || c.SHA != "1111111aaa" {
+		t.Errorf("Selected() = %+v, %v; want first commit 1111111aaa", c, ok)
+	}
+}

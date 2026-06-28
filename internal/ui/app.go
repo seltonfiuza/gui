@@ -1192,10 +1192,10 @@ func normalizeKey(s string) string {
 }
 
 func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// When a bottom-left panel is focused, j/k/enter drive it directly.
+	// When a bottom-left panel is focused, j/k/enter and → drive it directly.
 	if a.leftFocus == focusPRs || a.leftFocus == focusCommits {
 		switch msg.String() {
-		case "j", "down", "k", "up", "enter":
+		case "j", "down", "k", "up", "enter", "right", "l":
 			return a.routeLeftKey(msg)
 		}
 	}
@@ -1294,6 +1294,12 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		a.applyLayout()
 		return a, a.refreshDiffCmd()
 	case config.ActCollapse:
+		// While scrolling a commit's diff (entered via → from the Commits
+		// block), ← returns focus to the Commits list, keeping the diff shown.
+		if a.viewingCommit && a.leftFocus == focusDiff {
+			a.setLeftFocus(focusCommits)
+			return a, nil
+		}
 		a.setLeftFocus(focusFiles)
 		a.diff.Collapse()
 		return a, a.refreshDiffCmd()
@@ -1793,6 +1799,15 @@ func (a *App) routeLeftKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 	case focusCommits:
+		// → / l opens the selected commit's diff and moves focus into the diff
+		// pane so j/k scrolls the changes (← returns to the list).
+		if k := msg.String(); k == "right" || k == "l" {
+			if c, ok := a.commitPanel.Selected(); ok {
+				a.setLeftFocus(focusDiff)
+				return a, a.loadCommitDiffCmd(c.SHA)
+			}
+			return a, nil
+		}
 		intent := a.commitPanel.Update(msg)
 		a.syncLeftBlocks()
 		if intent.Kind == commitpanel.IntentActivate {

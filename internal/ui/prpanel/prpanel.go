@@ -99,7 +99,7 @@ func (m *Model) Update(key tea.KeyMsg) Intent {
 		m.pane.MoveSelection(1)
 	case "k", "up":
 		m.pane.MoveSelection(-1)
-	case "enter":
+	case "enter", "right", "l":
 		if sel := m.pane.Selected(); sel >= 0 && sel < len(m.prs) {
 			return Intent{Kind: IntentActivate, Number: m.prs[sel].Number}
 		}

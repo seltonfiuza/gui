@@ -102,6 +102,14 @@ func (m *Model) Update(key tea.KeyMsg) Intent {
 	return Intent{Kind: IntentNone}
 }
 
+// Selected returns the currently highlighted commit, or ok=false when empty.
+func (m *Model) Selected() (git.Commit, bool) {
+	if sel := m.pane.Selected(); sel >= 0 && sel < len(m.commits) {
+		return m.commits[sel], true
+	}
+	return git.Commit{}, false
+}
+
 // ScrollBy moves the selection by delta (used for mouse-wheel scroll).
 func (m *Model) ScrollBy(delta int) { m.pane.MoveSelection(delta) }
 

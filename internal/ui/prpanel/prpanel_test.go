@@ -56,3 +56,12 @@ func TestRenderRowNarrowWidthNoPanic(t *testing.T) {
 	m.SetPRs(sample())
 	_ = m.View() // must not panic
 }
+
+func TestRightActivatesPR(t *testing.T) {
+	m := New()
+	m.SetSize(40, 4)
+	m.SetPRs(sample())
+	if got := m.Update(tea.KeyMsg{Type: tea.KeyRight}); got.Kind != IntentActivate || got.Number != 13 {
+		t.Errorf("→ should activate the selected PR, got %+v", got)
+	}
+}

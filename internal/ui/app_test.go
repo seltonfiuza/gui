@@ -1197,3 +1197,31 @@ func TestEnterOnPRBlockOpensDetailNotList(t *testing.T) {
 		t.Errorf("block activation should open the PR detail, not the list:\n%s", out)
 	}
 }
+
+func TestRightArrowOnCommitFocusesDiffAndLoads(t *testing.T) {
+	a := newTestApp()
+	a.commitPanel.SetCommits([]git.Commit{{SHA: "deadbeef", Short: "deadbee", Subject: "x"}})
+	a.leftFocus = focusCommits
+	a.applyLeftFocus()
+	_, cmd := a.routeLeftKey(tea.KeyMsg{Type: tea.KeyRight})
+	if a.leftFocus != focusDiff {
+		t.Errorf("→ on a commit should focus the diff pane, got %v", a.leftFocus)
+	}
+	if cmd == nil {
+		t.Error("→ on a commit should load the commit diff")
+	}
+}
+
+func TestLeftArrowFromCommitDiffReturnsToCommits(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	a.leftFocus = focusDiff
+	a.applyLeftFocus()
+	a.dispatchAction(config.ActCollapse)
+	if a.leftFocus != focusCommits {
+		t.Errorf("← while viewing a commit diff should return to Commits, got %v", a.leftFocus)
+	}
+	if !a.viewingCommit {
+		t.Error("← should keep the commit diff shown (viewingCommit stays true)")
+	}
+}
