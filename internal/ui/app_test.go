@@ -1293,3 +1293,69 @@ func TestEditFileExistingFileReturnsCommand(t *testing.T) {
 		t.Fatalf("toast = %q, want empty", a.toast)
 	}
 }
+
+func runeKeyMsg(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+
+func prDetailApp(number int) *App {
+	a := newTestApp()
+	a.remote = &git.Remote{Owner: "o", Repo: "r", Host: "github.com"}
+	a.active = viewPR
+	a.pr.SetDetail(github.PR{Number: number, HeadRef: "feat"}, "")
+	return a
+}
+
+func TestApproveIntentFiresCommand(t *testing.T) {
+	a := prDetailApp(7)
+	a.handlePRKey(runeKeyMsg('a'))
+	_, cmd := a.handlePRKey(runeKeyMsg('y'))
+	if cmd == nil {
+		t.Fatal("approve confirm should return a command")
+	}
+	if !strings.Contains(a.toast, "approving") {
+		t.Errorf("toast = %q, want it to mention approving", a.toast)
+	}
+}
+
+func TestMergeIntentFiresCommand(t *testing.T) {
+	a := prDetailApp(7)
+	a.handlePRKey(runeKeyMsg('m'))
+	a.handlePRKey(runeKeyMsg('1')) // merge commit
+	a.handlePRKey(runeKeyMsg('y')) // confirm
+	_, cmd := a.handlePRKey(runeKeyMsg('y')) // delete: yes
+	if cmd == nil {
+		t.Fatal("merge delete-branch answer should return a command")
+	}
+	if !strings.Contains(a.toast, "merging") {
+		t.Errorf("toast = %q, want it to mention merging", a.toast)
+	}
+}
+
+func TestPrApproveDoneSuccess(t *testing.T) {
+	a := prDetailApp(7)
+	_, cmd := a.Update(prApproveDoneMsg{number: 7})
+	if !strings.Contains(a.toast, "approved #7") {
+		t.Errorf("toast = %q, want approved #7", a.toast)
+	}
+	if cmd == nil {
+		t.Fatal("approve-done should re-fetch the detail (non-nil cmd)")
+	}
+}
+
+func TestPrMergeDoneSuccess(t *testing.T) {
+	a := prDetailApp(7)
+	_, cmd := a.Update(prMergeDoneMsg{number: 7})
+	if !strings.Contains(a.toast, "merged #7") {
+		t.Errorf("toast = %q, want merged #7", a.toast)
+	}
+	if cmd == nil {
+		t.Fatal("merge-done should reload the PR list (non-nil cmd)")
+	}
+}
+
+func TestPrMergeDoneError(t *testing.T) {
+	a := prDetailApp(7)
+	a.Update(prMergeDoneMsg{number: 7, err: errors.New("not mergeable")})
+	if !strings.Contains(a.toast, "merge: not mergeable") {
+		t.Errorf("toast = %q, want merge: not mergeable", a.toast)
+	}
+}

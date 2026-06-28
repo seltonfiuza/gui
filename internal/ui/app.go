@@ -78,6 +78,17 @@ type prDetailMsg struct {
 	err  error
 }
 
+// prApproveDoneMsg / prMergeDoneMsg carry the result of an approve / merge.
+type prApproveDoneMsg struct {
+	number int
+	err    error
+}
+
+type prMergeDoneMsg struct {
+	number int
+	err    error
+}
+
 type diffMsg struct {
 	path string
 	raw  string
@@ -610,6 +621,31 @@ func (a *App) prCreateCmd(opts github.CreatePROpts) tea.Cmd {
 	}
 }
 
+// approveCmd approves PR number off the UI goroutine.
+func (a *App) approveCmd(number int) tea.Cmd {
+	remote := a.remote
+	return func() tea.Msg {
+		if remote == nil {
+			return prApproveDoneMsg{number: number, err: errors.New("no origin remote configured")}
+		}
+		svc := github.New(github.HostForRemote(remote))
+		return prApproveDoneMsg{number: number, err: svc.ApprovePR(remote, number)}
+	}
+}
+
+// mergeCmd merges PR number via method (optionally deleting the head branch) off
+// the UI goroutine.
+func (a *App) mergeCmd(number int, method github.MergeMethod, deleteBranch bool) tea.Cmd {
+	remote := a.remote
+	return func() tea.Msg {
+		if remote == nil {
+			return prMergeDoneMsg{number: number, err: errors.New("no origin remote configured")}
+		}
+		svc := github.New(github.HostForRemote(remote))
+		return prMergeDoneMsg{number: number, err: svc.MergePR(remote, number, method, deleteBranch)}
+	}
+}
+
 // prTitle labels the request overlay per the origin host: GitLab uses "Merge
 // Requests", everything else "Pull Requests".
 func (a *App) prTitle() string {
@@ -752,6 +788,23 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.pr.SetDetail(msg.pr, msg.diff)
 		return a, nil
+
+	case prApproveDoneMsg:
+		if msg.err != nil {
+			a.toast = "approve: " + msg.err.Error()
+			return a, nil
+		}
+		a.toast = fmt.Sprintf("approved #%d", msg.number)
+		return a, a.loadPRDetailCmd(msg.number)
+
+	case prMergeDoneMsg:
+		if msg.err != nil {
+			a.toast = "merge: " + msg.err.Error()
+			return a, nil
+		}
+		a.toast = fmt.Sprintf("merged #%d", msg.number)
+		a.pr.BackToList()
+		return a, a.loadPRsCmd()
 
 	case prCreatePrereqMsg:
 		if msg.err != nil {
@@ -1146,6 +1199,12 @@ func (a *App) handlePRKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case prlist.IntentCreate:
 		a.toast = "creating request…"
 		return a, tea.Batch(cmd, a.prCreateCmd(intent.Opts))
+	case prlist.IntentApprove:
+		a.toast = fmt.Sprintf("approving #%d…", intent.Number)
+		return a, tea.Batch(cmd, a.approveCmd(intent.Number))
+	case prlist.IntentMerge:
+		a.toast = fmt.Sprintf("merging #%d…", intent.Number)
+		return a, tea.Batch(cmd, a.mergeCmd(intent.Number, intent.Method, intent.DeleteBranch))
 	}
 	return a, cmd
 }
