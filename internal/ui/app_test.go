@@ -1262,6 +1262,8 @@ func TestEditFileNoSelection(t *testing.T) {
 }
 
 func TestEditFileMissingFile(t *testing.T) {
+	// repo.Root() returns "" for a zero-value git.Service, so filepath.Join("", path)
+	// resolves relative to the test CWD (internal/ui); the stub path "a.go" does not exist there.
 	a := newTestApp() // selected file defaults to a stub path that is not on disk
 	_, cmd := a.dispatchAction(config.ActEditFile)
 	if cmd != nil {
@@ -1273,6 +1275,8 @@ func TestEditFileMissingFile(t *testing.T) {
 }
 
 func TestEditFileExistingFileReturnsCommand(t *testing.T) {
+	// repo.Root() returns "" for a zero-value git.Service, so filepath.Join("", path)
+	// resolves relative to the test CWD (internal/ui); "app.go" exists there, so os.Stat passes.
 	a := newTestApp()
 	// Point the selection at a file that exists in this package's directory so
 	// the os.Stat guard passes. The returned command is not executed here.

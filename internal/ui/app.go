@@ -870,7 +870,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The file may have changed on disk; force the diff to reload and
 		// refresh the working-tree status so edits show immediately.
 		a.forceDiffReload = true
-		return a, tea.Batch(a.loadStatusCmd(), a.refreshDiffCmd())
+		// tea.ExecProcess releases the terminal (disabling mouse input), and
+		// Bubble Tea's RestoreTerminal only re-enables alt-screen/paste/focus —
+		// not mouse tracking — so we must explicitly re-arm it here.
+		return a, tea.Batch(a.loadStatusCmd(), a.refreshDiffCmd(), tea.EnableMouseAllMotion)
 
 	case tea.MouseMsg:
 		return a.handleMouse(msg)
