@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/seltonfiuza/gui/internal/config"
 	"github.com/seltonfiuza/gui/internal/git"
+	"github.com/seltonfiuza/gui/internal/github"
 	"github.com/seltonfiuza/gui/internal/ui/diffview"
 	"github.com/seltonfiuza/gui/internal/ui/styles"
 )
@@ -837,6 +839,32 @@ func TestBlameOverlaySwallowsMouse(t *testing.T) {
 	}
 }
 
+// TestWheelOverCommitBlockScrollsIt asserts wheeling over the commits block
+// scrolls it, rather than moving the file selection.
+func TestWheelOverCommitBlockScrollsIt(t *testing.T) {
+	a := newTestApp()
+	cs := make([]git.Commit, 10)
+	for i := range cs {
+		cs[i] = git.Commit{SHA: "s", Short: "s", Subject: "row" + string(rune('A'+i))}
+	}
+	a.commitPanel.SetCommits(cs)
+	// Pre-scroll to position 2 so that a subsequent ScrollBy(3) moves sel to 5,
+	// past the visible window edge (vis = leftBlockHeight-1 = 5), shifting the
+	// displayed rows from A-E to B-F and making before != after independent of
+	// ANSI color rendering.
+	a.commitPanel.ScrollBy(2)
+	a.applyLayout()
+	before := a.commitPanel.View()
+	// body-relative top of commits block + 2 → safely inside its rows; +1 to
+	// convert body→screen Y (header row).
+	screenY := a.commitBlockTopY() + 2 + 1
+	_, _ = a.handleMouse(tea.MouseMsg{X: 1, Y: screenY, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	after := a.commitPanel.View()
+	if before == after {
+		t.Errorf("wheel over commit block did not change its view\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
 // TestHoverHighlightsRowUnderPointer asserts mouse motion over a file row sets
 // the hover row, and motion outside the list clears it — without changing the
 // selection.
@@ -899,13 +927,23 @@ func TestTabTogglesFocusBetweenTreeAndDiff(t *testing.T) {
 	if a.diff.Focus() != diffview.FocusList {
 		t.Fatalf("focus should start on the file list")
 	}
-	pressNamed(a, tea.KeyTab)
-	if a.diff.Focus() != diffview.FocusDiff {
-		t.Fatalf("tab should move focus to the diff contents")
-	}
-	pressNamed(a, tea.KeyTab)
+	// Four-way cycle: Files → PRs → Commits → Diff → Files
+	// First three tabs keep list focus (PRs and Commits are in the left column).
+	pressNamed(a, tea.KeyTab) // focusPRs
 	if a.diff.Focus() != diffview.FocusList {
-		t.Fatalf("tab again should move focus back to the file tree")
+		t.Fatalf("tab 1 (focusPRs) should keep list focus")
+	}
+	pressNamed(a, tea.KeyTab) // focusCommits
+	if a.diff.Focus() != diffview.FocusList {
+		t.Fatalf("tab 2 (focusCommits) should keep list focus")
+	}
+	pressNamed(a, tea.KeyTab) // focusDiff
+	if a.diff.Focus() != diffview.FocusDiff {
+		t.Fatalf("tab 3 (focusDiff) should move focus to the diff contents")
+	}
+	pressNamed(a, tea.KeyTab) // focusFiles
+	if a.diff.Focus() != diffview.FocusList {
+		t.Fatalf("tab 4 (focusFiles) should return focus to the list")
 	}
 }
 
@@ -982,5 +1020,230 @@ func TestFooterShowsVersion(t *testing.T) {
 	a.version = "v1.2.3"
 	if !strings.Contains(a.renderFooter(), "v1.2.3") {
 		t.Fatalf("footer should show the version, got: %q", a.renderFooter())
+	}
+}
+
+func TestTabCyclesLeftFocusFilesPRsCommitsDiff(t *testing.T) {
+	a := newTestApp()
+	if a.leftFocus != focusFiles {
+		t.Fatalf("initial leftFocus = %v, want focusFiles", a.leftFocus)
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.leftFocus != focusPRs {
+		t.Errorf("after 1 tab = %v, want focusPRs", a.leftFocus)
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.leftFocus != focusCommits {
+		t.Errorf("after 2 tabs = %v, want focusCommits", a.leftFocus)
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.leftFocus != focusDiff {
+		t.Errorf("after 3 tabs = %v, want focusDiff", a.leftFocus)
+	}
+	pressNamed(a, tea.KeyTab)
+	if a.leftFocus != focusFiles {
+		t.Errorf("after 4 tabs = %v, want focusFiles (wrap)", a.leftFocus)
+	}
+}
+
+func TestCommitsMsgPopulatesCommitPanel(t *testing.T) {
+	a := newTestApp()
+	cs := []git.Commit{{SHA: "abc123def", Short: "abc123d", Subject: "hello", RelTime: "2h"}}
+	a.Update(commitsMsg{commits: cs})
+	if !strings.Contains(a.commitPanel.View(), "hello") {
+		t.Errorf("commit panel did not render commit after commitsMsg:\n%s", a.commitPanel.View())
+	}
+}
+
+func TestEnterOnCommitLoadsCommitDiffIntoPane(t *testing.T) {
+	a := newTestApp()
+	a.commitPanel.SetCommits([]git.Commit{{SHA: "deadbeef", Short: "deadbee", Subject: "x"}})
+	a.leftFocus = focusCommits
+	a.applyLeftFocus()
+	_, cmd := a.routeLeftKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected a command to fetch the commit diff")
+	}
+	a.Update(commitDiffMsg{sha: "deadbeef", raw: "diff --git a/x b/x\n+content\n"})
+	if !a.viewingCommit {
+		t.Error("expected viewingCommit=true after loading a commit diff")
+	}
+}
+
+func TestCommitDiffMsgSetsDiffViewViewingCommit(t *testing.T) {
+	a := newTestApp()
+	a.Update(commitDiffMsg{sha: "deadbeef", raw: "diff --git a/x b/x\n+content\n"})
+	// After loading a commit diff, the diff view must know it is showing a commit
+	// so it won't hide it on a clean tree.
+	if !a.viewingCommit {
+		t.Fatal("expected a.viewingCommit true")
+	}
+}
+
+func TestEnterOnPROpensPRView(t *testing.T) {
+	a := newTestApp()
+	a.prPanel.SetPRs([]github.PR{{Number: 13, Title: "x"}})
+	a.leftFocus = focusPRs
+	a.applyLeftFocus()
+	_, cmd := a.routeLeftKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if a.active != viewPR {
+		t.Errorf("expected active=viewPR after Enter on PR, got %v", a.active)
+	}
+	if cmd == nil {
+		t.Error("expected a command (loadPRDetailCmd) after activating a PR")
+	}
+}
+
+func TestEscWhileViewingCommitRestoresWorkingTreeDiff(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	a.dispatchAction(config.ActCancel)
+	if a.viewingCommit {
+		t.Error("Esc (ActCancel) should clear viewingCommit, restoring the working-tree diff")
+	}
+}
+
+func TestBgRefreshSuppressedWhileViewingCommit(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	if cmd := a.bgRefreshDiffCmd(); cmd != nil {
+		t.Error("bgRefreshDiffCmd should return nil while viewingCommit is true")
+	}
+}
+
+func TestWheelOverFileTreeStillMovesSelection(t *testing.T) {
+	a := newTestApp()
+	before := a.diff.SelectedPath()
+	// Screen row 1 = body row 0, which is the top of the file tree (above the
+	// PR/Commits blocks): the wheel must move the file selection, not a block.
+	a.handleMouse(tea.MouseMsg{X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if a.diff.SelectedPath() == before {
+		t.Errorf("wheel over file tree should still move file selection (got %q both before and after)", before)
+	}
+}
+
+func TestWheelOverPRBlockScrollsIt(t *testing.T) {
+	a := newTestApp()
+	prs := make([]github.PR, 10)
+	for i := range prs {
+		prs[i] = github.PR{Number: i + 1, Title: "pr" + string(rune('A'+i))}
+	}
+	a.prPanel.SetPRs(prs)
+	a.applyLayout()
+	before := a.prPanel.View()
+	// PR block body-relative top = commitBlockTopY() - leftBlockHeight; +2 inside
+	// its rows, +1 to convert body→screen Y.
+	screenY := a.commitBlockTopY() - 6 + 2 + 1
+	a.handleMouse(tea.MouseMsg{X: 1, Y: screenY, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if a.prPanel.View() == before {
+		t.Errorf("wheel over PR block did not change its view")
+	}
+}
+
+func TestNoRemoteShowsErrorInPRBlock(t *testing.T) {
+	a := newTestApp()
+	a.Update(prsMsg{err: errors.New("no origin remote configured")})
+	if !strings.Contains(a.prPanel.View(), "no") {
+		t.Errorf("PR block should show the remote error, got:\n%s", a.prPanel.View())
+	}
+}
+
+func TestRemoteMsgTriggersPRLoad(t *testing.T) {
+	a := newTestApp()
+	_, cmd := a.Update(remoteMsg{remote: &git.Remote{Owner: "o", Repo: "r", Host: "github.com"}})
+	if cmd == nil {
+		t.Fatal("remoteMsg with a remote should trigger a PR load command (startup PR fetch)")
+	}
+}
+
+func TestWheelOverFileTreeResetsLeftFocusFromBlock(t *testing.T) {
+	a := newTestApp()
+	a.leftFocus = focusCommits
+	a.applyLeftFocus()
+	// Screen row 1 = body row 0 = top of the file tree.
+	a.handleMouse(tea.MouseMsg{X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if a.leftFocus != focusFiles {
+		t.Errorf("wheeling over the file tree should reset leftFocus to focusFiles, got %v", a.leftFocus)
+	}
+}
+
+// TestClickingFileResetsLeftFocusFromBlock guards against keyboard routing
+// sticking to a bottom panel after the user clicks a file in the tree: the click
+// must move focus back to the file list so j/k act on the selection again.
+func TestClickingFileResetsLeftFocusFromBlock(t *testing.T) {
+	a := newTestApp()
+	a.leftFocus = focusCommits
+	a.applyLeftFocus()
+	// Left-click a file row in the tree (b.go's row -> screen y=5).
+	a.handleMouse(tea.MouseMsg{X: 2, Y: 5, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	if a.leftFocus != focusFiles {
+		t.Errorf("clicking a file should reset leftFocus to focusFiles, got %v", a.leftFocus)
+	}
+}
+
+func TestEnterOnPRBlockOpensDetailNotList(t *testing.T) {
+	a := newTestApp()
+	a.prPanel.SetPRs([]github.PR{{Number: 7, Title: "x"}})
+	a.leftFocus = focusPRs
+	a.applyLeftFocus()
+	_, cmd := a.routeLeftKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if a.active != viewPR {
+		t.Fatalf("expected active=viewPR after activating a PR from the block")
+	}
+	if cmd == nil {
+		t.Fatal("expected a command batch (list + detail load)")
+	}
+	if out := a.pr.View(80, 24); strings.Contains(out, "n new") {
+		t.Errorf("block activation should open the PR detail, not the list:\n%s", out)
+	}
+}
+
+func TestRightArrowOnCommitFocusesDiffAndLoads(t *testing.T) {
+	a := newTestApp()
+	a.commitPanel.SetCommits([]git.Commit{{SHA: "deadbeef", Short: "deadbee", Subject: "x"}})
+	a.leftFocus = focusCommits
+	a.applyLeftFocus()
+	_, cmd := a.routeLeftKey(tea.KeyMsg{Type: tea.KeyRight})
+	if a.leftFocus != focusDiff {
+		t.Errorf("→ on a commit should focus the diff pane, got %v", a.leftFocus)
+	}
+	if cmd == nil {
+		t.Error("→ on a commit should load the commit diff")
+	}
+}
+
+func TestLeftArrowFromCommitDiffReturnsToCommits(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	a.leftFocus = focusDiff
+	a.applyLeftFocus()
+	a.dispatchAction(config.ActCollapse)
+	if a.leftFocus != focusCommits {
+		t.Errorf("← while viewing a commit diff should return to Commits, got %v", a.leftFocus)
+	}
+	if !a.viewingCommit {
+		t.Error("← should keep the commit diff shown (viewingCommit stays true)")
+	}
+}
+
+func TestDownWhileScrollingCommitDiffDoesNotClobber(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	a.leftFocus = focusDiff
+	a.applyLeftFocus() // diff is now FocusDiff
+	a.dispatchAction(config.ActDown)
+	if !a.viewingCommit {
+		t.Error("↓ while scrolling a commit diff must not reload the working-tree file diff")
+	}
+}
+
+func TestRightWhileScrollingCommitDiffStaysInCommitView(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	a.leftFocus = focusDiff
+	a.applyLeftFocus()
+	a.dispatchAction(config.ActExpand)
+	if !a.viewingCommit || a.leftFocus != focusDiff {
+		t.Errorf("→ while scrolling a commit diff should stay put (viewingCommit=%v leftFocus=%v)", a.viewingCommit, a.leftFocus)
 	}
 }

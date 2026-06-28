@@ -804,6 +804,93 @@ func (s *Service) LastCommitMessage() (string, error) {
 	return strings.TrimRight(out, "\n"), nil
 }
 
+// Commit is one entry from `git log`, summarized for the commits block.
+type Commit struct {
+	SHA     string
+	Short   string
+	Author  string
+	Subject string
+	When    time.Time
+	RelTime string // humanized age, e.g. "3h", "2d"
+}
+
+// logFieldSep is an ASCII unit separator unlikely to appear in commit metadata.
+const logFieldSep = "\x1f"
+
+// Log returns up to n most-recent commits reachable from HEAD, newest first.
+// Returns an empty slice (no error) for a repo with no commits.
+func (s *Service) Log(n int) ([]Commit, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	format := strings.Join([]string{"%H", "%h", "%an", "%at", "%s"}, logFieldSep)
+	out, err := s.run("log", "--no-color", "-n", strconv.Itoa(n), "--pretty=format:"+format)
+	if err != nil {
+		// No commits yet (unborn HEAD): rev-parse --verify HEAD fails. Any other
+		// error is a real failure.
+		if _, headErr := s.run("rev-parse", "--verify", "HEAD"); headErr != nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out = strings.TrimRight(out, "\n")
+	if out == "" {
+		return nil, nil
+	}
+	var commits []Commit
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(line, logFieldSep)
+		if len(f) != 5 {
+			continue
+		}
+		when := time.Time{}
+		if unix, perr := strconv.ParseInt(f[3], 10, 64); perr == nil {
+			when = time.Unix(unix, 0)
+		}
+		commits = append(commits, Commit{
+			SHA:     f[0],
+			Short:   f[1],
+			Author:  f[2],
+			Subject: f[4],
+			When:    when,
+			RelTime: humanizeAge(when),
+		})
+	}
+	return commits, nil
+}
+
+// humanizeAge renders the age of t as a short token: "now", "5m", "3h", "2d",
+// "4w", or "1y". Returns "" for a zero time.
+func humanizeAge(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "now"
+	case d < time.Hour:
+		return strconv.Itoa(int(d.Minutes())) + "m"
+	case d < 24*time.Hour:
+		return strconv.Itoa(int(d.Hours())) + "h"
+	case d < 7*24*time.Hour:
+		return strconv.Itoa(int(d.Hours()/24)) + "d"
+	case d < 365*24*time.Hour:
+		return strconv.Itoa(int(d.Hours()/(24*7))) + "w"
+	default:
+		return strconv.Itoa(int(d.Hours()/(24*365))) + "y"
+	}
+}
+
+// CommitDiff returns the unified diff for a single commit (`git show`), suitable
+// for read-only display in the diff pane.
+func (s *Service) CommitDiff(sha string) (string, error) {
+	if strings.TrimSpace(sha) == "" {
+		return "", errors.New("empty commit sha")
+	}
+	return s.run("show", "--no-color", sha)
+}
+
 // RebaseInProgress reports whether a rebase is currently in progress.
 func (s *Service) RebaseInProgress() (bool, error) {
 	out, err := s.run("rev-parse", "--git-dir")

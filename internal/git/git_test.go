@@ -908,3 +908,85 @@ func TestBlameLine(t *testing.T) {
 		t.Errorf("Summary = %q, want initial", e.Summary)
 	}
 }
+
+func TestLogReturnsRecentCommitsNewestFirst(t *testing.T) {
+	requireGit(t)
+	dir := newRepo(t) // newRepo makes an initial commit on main
+	writeFile(t, dir, "a.txt", "a\n")
+	runGit(t, dir, "add", "a.txt")
+	runGit(t, dir, "commit", "-m", "add a")
+	writeFile(t, dir, "b.txt", "b\n")
+	runGit(t, dir, "add", "b.txt")
+	runGit(t, dir, "commit", "-m", "add b")
+
+	s := &Service{root: dir}
+	commits, err := s.Log(10)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(commits) != 3 {
+		t.Fatalf("want 3 commits, got %d", len(commits))
+	}
+	if commits[0].Subject != "add b" {
+		t.Errorf("newest subject = %q, want %q", commits[0].Subject, "add b")
+	}
+	if len(commits[0].Short) == 0 || len(commits[0].Short) >= len(commits[0].SHA) || !strings.HasPrefix(commits[0].SHA, commits[0].Short) {
+		t.Errorf("Short %q should be a prefix shorter than SHA %q", commits[0].Short, commits[0].SHA)
+	}
+	if commits[0].When.IsZero() || commits[0].RelTime == "" {
+		t.Errorf("When/RelTime not populated: %+v", commits[0])
+	}
+}
+
+func TestLogRespectsLimit(t *testing.T) {
+	requireGit(t)
+	dir := newRepo(t)
+	for _, name := range []string{"x", "y", "z"} {
+		writeFile(t, dir, name+".txt", name+"\n")
+		runGit(t, dir, "add", name+".txt")
+		runGit(t, dir, "commit", "-m", "add "+name)
+	}
+	s := &Service{root: dir}
+	commits, err := s.Log(2)
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("limit 2 returned %d commits", len(commits))
+	}
+}
+
+func TestLogEmptyRepoReturnsNoCommits(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	s := &Service{root: dir}
+	commits, err := s.Log(10)
+	if err != nil {
+		t.Fatalf("Log on empty repo: %v", err)
+	}
+	if len(commits) != 0 {
+		t.Fatalf("empty repo returned %d commits, want 0", len(commits))
+	}
+}
+
+func TestCommitDiffShowsCommitChanges(t *testing.T) {
+	requireGit(t)
+	dir := newRepo(t)
+	writeFile(t, dir, "hello.txt", "hello world\n")
+	runGit(t, dir, "-C", dir, "add", "hello.txt")
+	runGit(t, dir, "-C", dir, "commit", "-m", "add hello")
+
+	s := &Service{root: dir}
+	commits, err := s.Log(1)
+	if err != nil || len(commits) == 0 {
+		t.Fatalf("Log setup failed: %v (%d)", err, len(commits))
+	}
+	diff, err := s.CommitDiff(commits[0].SHA)
+	if err != nil {
+		t.Fatalf("CommitDiff: %v", err)
+	}
+	if !strings.Contains(diff, "hello.txt") || !strings.Contains(diff, "+hello world") {
+		t.Errorf("diff missing expected content:\n%s", diff)
+	}
+}

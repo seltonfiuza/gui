@@ -450,3 +450,79 @@ func TestFlatModeShowsFullPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestSetLeftBlocksAppearInView(t *testing.T) {
+	m := New()
+	m.SetSize(80, 20, 24)
+	// Give it minimal non-clean status so View renders the list column.
+	m.SetStatus(&git.Status{
+		Unstaged: []git.ChangedFile{
+			{Path: "foo.go", Worktree: git.Modified},
+		},
+	})
+	m.SetLeftBlocks([]string{"BLOCK-ONE-MARKER", "BLOCK-TWO-MARKER"})
+	out := m.View()
+	if !strings.Contains(out, "BLOCK-ONE-MARKER") || !strings.Contains(out, "BLOCK-TWO-MARKER") {
+		t.Errorf("left blocks not rendered in View:\n%s", out)
+	}
+}
+
+// TestCleanStateStillShowsLeftBlocks asserts that with a clean working tree the
+// left column (and its PR / Commits blocks) is still rendered, rather than the
+// whole view collapsing to the centered "all caught up" message.
+func TestCleanStateStillShowsLeftBlocks(t *testing.T) {
+	m := New()
+	m.SetSize(80, 20, 24)
+	m.SetStatus(&git.Status{}) // clean: no changes
+	if !m.IsClean() {
+		t.Fatal("status with no changes should be clean")
+	}
+	m.SetLeftBlocks([]string{"BLOCK-ONE-MARKER", "BLOCK-TWO-MARKER"})
+	out := m.View()
+	if !strings.Contains(out, "BLOCK-ONE-MARKER") || !strings.Contains(out, "BLOCK-TWO-MARKER") {
+		t.Errorf("clean state dropped the left blocks:\n%s", out)
+	}
+	if !strings.Contains(out, "working tree clean") {
+		t.Errorf("clean state should still show the friendly message:\n%s", out)
+	}
+}
+
+// TestCleanStateWithTreeHiddenIsFullWidth asserts the clean message still fills
+// the width (no left column) when the file tree is hidden.
+func TestCleanStateWithTreeHiddenIsFullWidth(t *testing.T) {
+	m := New()
+	m.SetSize(80, 20, 24)
+	m.SetStatus(&git.Status{})
+	m.SetListHidden(true)
+	m.SetLeftBlocks([]string{"BLOCK-ONE-MARKER"})
+	out := m.View()
+	if strings.Contains(out, "BLOCK-ONE-MARKER") {
+		t.Errorf("blocks should not render when the tree is hidden:\n%s", out)
+	}
+	if !strings.Contains(out, "working tree clean") {
+		t.Errorf("clean state should show the friendly message:\n%s", out)
+	}
+}
+
+func TestViewingCommitShowsDiffOnCleanTree(t *testing.T) {
+	m := New()
+	m.SetSize(80, 20, 24)
+	// No status set → IsClean() is true (no rows).
+	m.SetDiff("commit abc1234", "diff --git a/x b/x\n@@ -1 +1 @@\n-old\n+COMMIT_DIFF_MARKER\n")
+	m.SetViewingCommit(true)
+	out := m.View()
+	if strings.Contains(out, "working tree clean") {
+		t.Errorf("clean-state message should be suppressed while viewing a commit:\n%s", out)
+	}
+	if !strings.Contains(out, "COMMIT_DIFF_MARKER") {
+		t.Errorf("commit diff content should be visible on a clean tree:\n%s", out)
+	}
+}
+
+func TestCleanTreeStillShowsMessageWhenNotViewingCommit(t *testing.T) {
+	m := New()
+	m.SetSize(80, 20, 24)
+	if !strings.Contains(m.View(), "working tree clean") {
+		t.Errorf("a genuinely clean tree (not viewing a commit) should still show the clean message:\n%s", m.View())
+	}
+}

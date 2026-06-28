@@ -22,10 +22,12 @@ import (
 	"github.com/seltonfiuza/gui/internal/git"
 	"github.com/seltonfiuza/gui/internal/github"
 	"github.com/seltonfiuza/gui/internal/ui/branchpanel"
+	"github.com/seltonfiuza/gui/internal/ui/commitpanel"
 	"github.com/seltonfiuza/gui/internal/ui/diffview"
 	"github.com/seltonfiuza/gui/internal/ui/help"
 	"github.com/seltonfiuza/gui/internal/ui/palette"
 	"github.com/seltonfiuza/gui/internal/ui/prlist"
+	"github.com/seltonfiuza/gui/internal/ui/prpanel"
 	"github.com/seltonfiuza/gui/internal/ui/styles"
 	"github.com/seltonfiuza/gui/internal/ui/themepicker"
 )
@@ -40,6 +42,16 @@ const (
 	viewTheme
 	viewPR
 	viewPalette
+)
+
+// leftFocus tracks which left-column region (or the diff) has keyboard focus.
+type leftFocus int
+
+const (
+	focusFiles leftFocus = iota
+	focusPRs
+	focusCommits
+	focusDiff
 )
 
 // ---- messages returned by git commands ----
@@ -117,13 +129,19 @@ type App struct {
 	status *git.Status
 	remote *git.Remote
 
-	active  view
-	diff    diffview.Model
-	branch  branchpanel.Model
-	help    help.Model
-	theme   themepicker.Model
-	pr      prlist.Model
-	palette palette.Model
+	active      view
+	diff        diffview.Model
+	branch      branchpanel.Model
+	help        help.Model
+	theme       themepicker.Model
+	pr          prlist.Model
+	palette     palette.Model
+	prPanel     prpanel.Model
+	commitPanel commitpanel.Model
+	leftFocus   leftFocus
+
+	// viewingCommit is true while the diff pane shows a historical commit (git show) instead of the working-tree diff.
+	viewingCommit bool
 
 	// dragging is true while the user holds the mouse on the divider to resize.
 	dragging bool
@@ -259,6 +277,8 @@ func New(repo *git.Service, version string) tea.Model {
 		theme:       themepicker.New(),
 		pr:          prlist.New(),
 		palette:     palette.New(),
+		prPanel:     prpanel.New(),
+		commitPanel: commitpanel.New(),
 		listWidth:   defaultListWidth,
 		autoRefresh: true,
 		version:     version,
@@ -270,7 +290,8 @@ func New(repo *git.Service, version string) tea.Model {
 // and enables all-motion mouse tracking so clicks/scroll/drag AND hover (motion
 // with no button) are delivered to Update — the latter drives hover highlights.
 func (a *App) Init() tea.Cmd {
-	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), scheduleTick(), tea.EnableMouseAllMotion)
+	a.prPanel.SetPlaceholder("loading…")
+	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), a.loadCommitsCmd(), scheduleTick(), tea.EnableMouseAllMotion)
 }
 
 // ---- commands ----
@@ -360,7 +381,7 @@ func (a *App) handleBgStatus(msg bgStatusMsg) (tea.Model, tea.Cmd) {
 	a.status = msg.status
 	a.statusFP = fp
 	a.diff.SetStatus(msg.status)
-	return a, tea.Batch(next, a.bgRefreshDiffCmd())
+	return a, tea.Batch(next, a.bgRefreshDiffCmd(), a.loadCommitsCmd())
 }
 
 // bgRefreshDiffCmd re-fetches the selected file's diff for a background refresh.
@@ -368,6 +389,9 @@ func (a *App) handleBgStatus(msg bgStatusMsg) (tea.Model, tea.Cmd) {
 // place content is picked up) but the result is applied via SetDiffPreserving,
 // which keeps the line cursor and scroll when the diff text is unchanged.
 func (a *App) bgRefreshDiffCmd() tea.Cmd {
+	if a.viewingCommit {
+		return nil
+	}
 	row, ok := a.diff.Selected()
 	if !ok {
 		return nil
@@ -454,6 +478,46 @@ func (a *App) loadRemoteCmd() tea.Cmd {
 		r, err := repo.OriginRemote()
 		return remoteMsg{remote: r, err: err}
 	}
+}
+
+// commitLogLimit caps how many commits the Commits block reads.
+const commitLogLimit = 50
+
+type commitsMsg struct {
+	commits []git.Commit
+	err     error
+}
+
+// loadCommitsCmd reads the recent commit log off the UI thread.
+func (a *App) loadCommitsCmd() tea.Cmd {
+	repo := a.repo
+	return func() tea.Msg {
+		cs, err := repo.Log(commitLogLimit)
+		return commitsMsg{commits: cs, err: err}
+	}
+}
+
+type commitDiffMsg struct {
+	sha string
+	raw string
+	err error
+}
+
+// loadCommitDiffCmd fetches a commit's diff (git show) off the UI thread.
+func (a *App) loadCommitDiffCmd(sha string) tea.Cmd {
+	repo := a.repo
+	return func() tea.Msg {
+		raw, err := repo.CommitDiff(sha)
+		return commitDiffMsg{sha: sha, raw: raw, err: err}
+	}
+}
+
+// shortSHA abbreviates a full commit SHA for display.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
 
 // loadPRsCmd fetches the open pull/merge requests for the origin remote off the
@@ -637,17 +701,41 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				a.toast = "remote: " + msg.err.Error()
 			}
 			a.remote = nil
-			return a, nil
+			return a, a.loadPRsCmd()
 		}
 		a.remote = msg.remote
-		return a, nil
+		return a, a.loadPRsCmd()
 
 	case prsMsg:
 		if msg.err != nil {
 			a.pr.SetError(msg.err.Error())
+			a.prPanel.SetError(msg.err.Error())
+			a.syncLeftBlocks()
 			return a, nil
 		}
 		a.pr.SetPRs(msg.prs)
+		a.prPanel.SetPRs(msg.prs)
+		a.syncLeftBlocks()
+		return a, nil
+
+	case commitsMsg:
+		if msg.err == nil {
+			a.commitPanel.SetCommits(msg.commits)
+			if len(msg.commits) == 0 {
+				a.commitPanel.SetPlaceholder("no commits yet")
+			}
+		}
+		a.syncLeftBlocks()
+		return a, nil
+
+	case commitDiffMsg:
+		if msg.err != nil {
+			a.toast = "commit diff: " + msg.err.Error()
+			return a, nil
+		}
+		a.viewingCommit = true
+		a.diff.SetDiff("commit "+shortSHA(msg.sha), msg.raw)
+		a.diff.SetViewingCommit(true)
 		return a, nil
 
 	case prDetailMsg:
@@ -695,6 +783,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case bgDiffMsg:
+		// A poll diff-fetch that was already in flight when the user opened a
+		// commit view must not overwrite it.
+		if a.viewingCommit {
+			return a, nil
+		}
 		if msg.err != nil {
 			// Background diff errors are non-fatal and not toasted (the path may
 			// have just vanished); the next status tick reconciles.
@@ -814,6 +907,26 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return a, nil
 	}
 
+	if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+		delta := -3
+		if msg.Button == tea.MouseButtonWheelDown {
+			delta = 3
+		}
+		if prTop, prBot, cTop, cBot, ok := a.leftBlockYRanges(); ok && msg.X < a.listWidth {
+			bodyY := msg.Y - 1 // header occupies screen row 0
+			switch {
+			case bodyY >= cTop && bodyY < cBot:
+				a.commitPanel.ScrollBy(delta)
+				a.syncLeftBlocks()
+				return a, nil
+			case bodyY >= prTop && bodyY < prBot:
+				a.prPanel.ScrollBy(delta)
+				a.syncLeftBlocks()
+				return a, nil
+			}
+		}
+	}
+
 	h := hitTest(a.currentLayout(), msg.X, msg.Y)
 
 	// Wheel scroll acts on whatever region is under the pointer: the diff pane
@@ -826,7 +939,7 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case hitDiff:
 			a.diff.ScrollDiff(-3)
 		case hitList:
-			a.diff.FocusList()
+			a.setLeftFocus(focusFiles)
 			a.diff.SelectPrev()
 			return a, a.refreshDiffCmd()
 		}
@@ -836,7 +949,7 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case hitDiff:
 			a.diff.ScrollDiff(3)
 		case hitList:
-			a.diff.FocusList()
+			a.setLeftFocus(focusFiles)
 			a.diff.SelectNext()
 			return a, a.refreshDiffCmd()
 		}
@@ -880,12 +993,12 @@ func (a *App) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if a.diff.Activate() {
 				return a, nil
 			}
-			a.diff.FocusList()
+			a.setLeftFocus(focusFiles)
 			return a, a.refreshDiffCmd()
 		}
 		return a, nil
 	case hitDiff:
-		a.diff.FocusDiff()
+		a.setLeftFocus(focusDiff)
 		a.diff.MoveCursorToRendered(h.line)
 		return a, a.refreshDiffCmd()
 	}
@@ -1079,6 +1192,13 @@ func normalizeKey(s string) string {
 }
 
 func (a *App) handleDiffKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// When a bottom-left panel is focused, j/k/enter and → drive it directly.
+	if a.leftFocus == focusPRs || a.leftFocus == focusCommits {
+		switch msg.String() {
+		case "j", "down", "k", "up", "enter", "right", "l":
+			return a.routeLeftKey(msg)
+		}
+	}
 	action := a.dispatcher.Resolve(normalizeKey(msg.String()))
 	if action == config.ActNone {
 		// Unhandled key: let the diff viewport scroll (pgup/pgdn/etc).
@@ -1120,7 +1240,7 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		return a, nil
 	case config.ActRefresh:
 		a.toast = ""
-		return a, a.loadStatusCmd()
+		return a, tea.Batch(a.loadStatusCmd(), a.loadPRsCmd(), a.loadCommitsCmd())
 	case config.ActToggleAutoRefresh:
 		a.autoRefresh = !a.autoRefresh
 		if a.autoRefresh {
@@ -1131,52 +1251,73 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		return a, nil
 	case config.ActDown:
 		a.diff.CursorDown()
-		return a, a.refreshDiffCmd()
+		// Only reload when the file SELECTION moved (list focus); scrolling the
+		// diff cursor needs no reload and must not clobber a shown commit diff.
+		if a.diff.Focus() == diffview.FocusList {
+			return a, a.refreshDiffCmd()
+		}
+		return a, nil
 	case config.ActUp:
 		a.diff.CursorUp()
-		return a, a.refreshDiffCmd()
+		if a.diff.Focus() == diffview.FocusList {
+			return a, a.refreshDiffCmd()
+		}
+		return a, nil
 	case config.ActConfirm:
 		// On a folder, enter/space toggles it; on a file, focus the diff pane so
 		// j/k move the line cursor.
 		if a.diff.Activate() {
 			return a, nil
 		}
-		a.diff.FocusDiff()
+		a.setLeftFocus(focusDiff)
 		return a, a.refreshDiffCmd()
 	case config.ActCancel:
-		// Return focus to the file list.
-		a.diff.FocusList()
-		return a, nil
+		// Return focus to the file list and restore the working-tree diff if a commit was shown.
+		a.leftFocus = focusFiles
+		a.applyLeftFocus()
+		a.syncLeftBlocks()
+		return a, a.refreshDiffCmd()
 	case config.ActFocusToggle:
-		// Tab moves focus between the file tree and the diff contents. With the
-		// tree hidden there's nothing to focus but the diff, so it's a no-op.
 		if a.diff.ListHidden() {
 			return a, nil
 		}
-		if a.diff.Focus() == diffview.FocusDiff {
-			a.diff.FocusList()
-			return a, nil
+		a.leftFocus = (a.leftFocus + 1) % 4
+		a.applyLeftFocus()
+		a.syncLeftBlocks()
+		if a.leftFocus == focusDiff {
+			return a, a.refreshDiffCmd()
 		}
-		a.diff.FocusDiff()
-		return a, a.refreshDiffCmd()
+		return a, nil
 	case config.ActHideTree:
 		hidden := !a.diff.ListHidden()
 		a.diff.SetListHidden(hidden)
 		if hidden {
-			a.diff.FocusDiff()
+			a.leftFocus = focusDiff
 			a.toast = "file tree: hidden (E to show)"
 		} else {
-			a.diff.FocusList()
+			a.leftFocus = focusFiles
 			a.toast = "file tree: shown"
 		}
+		a.applyLeftFocus()
 		a.applyLayout()
 		return a, a.refreshDiffCmd()
 	case config.ActCollapse:
-		a.diff.FocusList()
+		// While scrolling a commit's diff (entered via → from the Commits
+		// block), ← returns focus to the Commits list, keeping the diff shown.
+		if a.viewingCommit && a.leftFocus == focusDiff {
+			a.setLeftFocus(focusCommits)
+			return a, nil
+		}
+		a.setLeftFocus(focusFiles)
 		a.diff.Collapse()
 		return a, a.refreshDiffCmd()
 	case config.ActExpand:
-		a.diff.FocusList()
+		// → while scrolling a commit's diff stays in the commit view (it's
+		// already focused); don't leak to the working-tree file tree.
+		if a.viewingCommit && a.leftFocus == focusDiff {
+			return a, nil
+		}
+		a.setLeftFocus(focusFiles)
 		a.diff.Expand()
 		return a, a.refreshDiffCmd()
 	case config.ActToggleTree:
@@ -1247,6 +1388,8 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 // refreshDiffCmd loads the diff for the currently selected file if it differs
 // from what's shown.
 func (a *App) refreshDiffCmd() tea.Cmd {
+	a.viewingCommit = false
+	a.diff.SetViewingCommit(false)
 	row, ok := a.diff.Selected()
 	if !ok {
 		return nil
@@ -1586,6 +1729,106 @@ const (
 func (a *App) applyLayout() {
 	a.listWidth = diffview.ClampListWidth(a.width, a.listWidth)
 	a.diff.SetSize(a.width, a.bodyHeight(), a.listWidth)
+	a.syncLeftBlocks()
+}
+
+// leftBlockHeight is the fixed row budget (incl. title) for each bottom panel.
+const leftBlockHeight = 6
+
+// leftBlockYRanges returns the body-relative [top,bottom) row ranges of the PR
+// and Commits blocks (bottom of the left column), or ok=false when the tree is
+// hidden. The Commits block is bottom-most; the PR block sits just above it.
+func (a *App) leftBlockYRanges() (prTop, prBot, cTop, cBot int, ok bool) {
+	if a.diff.ListHidden() {
+		return 0, 0, 0, 0, false
+	}
+	bodyH := a.bodyHeight()
+	if bodyH < 2*leftBlockHeight {
+		// Not enough room for both blocks; don't intercept (keep the file list
+		// wheel-scrollable).
+		return 0, 0, 0, 0, false
+	}
+	cBot = bodyH
+	cTop = cBot - leftBlockHeight
+	prBot = cTop
+	prTop = prBot - leftBlockHeight
+	return prTop, prBot, cTop, cBot, true
+}
+
+// commitBlockTopY is the body-relative first row of the Commits block (used by
+// hit-testing and tests).
+func (a *App) commitBlockTopY() int {
+	_, _, cTop, _, _ := a.leftBlockYRanges()
+	return cTop
+}
+
+// syncLeftBlocks sizes the two panels to the list width and pushes their
+// rendered strings into the diff view's left column. When the file tree is
+// hidden there is no left column, so the blocks are cleared.
+func (a *App) syncLeftBlocks() {
+	if a.diff.ListHidden() || a.listWidth <= 0 {
+		a.diff.SetLeftBlocks(nil)
+		return
+	}
+	a.prPanel.SetSize(a.listWidth, leftBlockHeight)
+	a.commitPanel.SetSize(a.listWidth, leftBlockHeight)
+	a.diff.SetLeftBlocks([]string{a.prPanel.View(), a.commitPanel.View()})
+}
+
+// applyLeftFocus reflects a.leftFocus into the diff view and the two panels so
+// exactly one region shows the active selection style.
+func (a *App) applyLeftFocus() {
+	a.prPanel.SetFocused(a.leftFocus == focusPRs)
+	a.commitPanel.SetFocused(a.leftFocus == focusCommits)
+	if a.leftFocus == focusDiff {
+		a.diff.FocusDiff()
+	} else {
+		a.diff.FocusList()
+	}
+}
+
+// setLeftFocus updates the focused left-column region and reconciles the diff
+// view focus + panel highlight + rendering. Use this instead of calling
+// a.diff.FocusList()/FocusDiff() directly so keyboard routing never desyncs
+// from the visible focus.
+func (a *App) setLeftFocus(f leftFocus) {
+	a.leftFocus = f
+	a.applyLeftFocus()
+	a.syncLeftBlocks()
+}
+
+// routeLeftKey forwards a navigation/activation key to the focused bottom panel.
+func (a *App) routeLeftKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch a.leftFocus {
+	case focusPRs:
+		intent := a.prPanel.Update(msg)
+		a.syncLeftBlocks()
+		if intent.Kind == prpanel.IntentActivate {
+			a.active = viewPR
+			// Open straight into the PR's detail (loading), and load the list
+			// behind it so Esc returns to a populated list.
+			a.pr.OpenDetail(a.prTitle())
+			return a, tea.Batch(a.loadPRsCmd(), a.loadPRDetailCmd(intent.Number))
+		}
+		return a, nil
+	case focusCommits:
+		// → / l opens the selected commit's diff and moves focus into the diff
+		// pane so j/k scrolls the changes (← returns to the list).
+		if k := msg.String(); k == "right" || k == "l" {
+			if c, ok := a.commitPanel.Selected(); ok {
+				a.setLeftFocus(focusDiff)
+				return a, a.loadCommitDiffCmd(c.SHA)
+			}
+			return a, nil
+		}
+		intent := a.commitPanel.Update(msg)
+		a.syncLeftBlocks()
+		if intent.Kind == commitpanel.IntentActivate {
+			return a, a.loadCommitDiffCmd(intent.SHA)
+		}
+		return a, nil
+	}
+	return a, nil
 }
 
 // growDiff shrinks the file list (grows the diff pane) by one step, clamped.

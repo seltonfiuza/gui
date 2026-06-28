@@ -81,21 +81,24 @@ type Model struct {
 
 	focus Focus
 
-	vp          viewport.Model
-	vpReady     bool
-	diffPath    string   // path the viewport content currently belongs to
-	diffRaw     string   // raw (uncolorized) diff text for the loaded path
-	diffLines   []string // strings.Split(diffRaw, "\n") — the RAW cursor index space
-	cleaned     cleanedDiff
-	styledLines []string // per-rendered-row colorized cache (parallel to cleaned.lines)
-	hunks       []git.Hunk
-	lineCursor  int  // 0-based index into diffLines (RAW space; matches git.ParseHunks)
-	prevCursor  int  // last RAW cursor whose highlight is reflected in styledLines
-	rawMode     bool // when true, show the unfiltered raw diff (toggle)
+	vp            viewport.Model
+	vpReady       bool
+	diffPath      string   // path the viewport content currently belongs to
+	viewingCommit bool     // app is showing a historical commit diff; suppress the clean-state message
+	diffRaw       string   // raw (uncolorized) diff text for the loaded path
+	diffLines     []string // strings.Split(diffRaw, "\n") — the RAW cursor index space
+	cleaned       cleanedDiff
+	styledLines   []string // per-rendered-row colorized cache (parallel to cleaned.lines)
+	hunks         []git.Hunk
+	lineCursor    int  // 0-based index into diffLines (RAW space; matches git.ParseHunks)
+	prevCursor    int  // last RAW cursor whose highlight is reflected in styledLines
+	rawMode       bool // when true, show the unfiltered raw diff (toggle)
 
 	listWidth   int
 	totalWidth  int
 	totalHeight int
+
+	leftBlocks []string // pre-rendered extra left-column blocks (pr/commits)
 }
 
 // New builds an empty diff panel.
@@ -119,6 +122,26 @@ func (m *Model) CommitBarHeight() int {
 		return commitBarLines
 	}
 	return 0
+}
+
+// SetLeftBlocks sets extra pre-rendered blocks stacked beneath the commit bar in
+// the left column. Each string should already be sized to listWidth.
+func (m *Model) SetLeftBlocks(blocks []string) { m.leftBlocks = blocks }
+
+// SetViewingCommit tells the view a historical commit diff is being shown, so
+// the clean-working-tree message does not hide it.
+func (m *Model) SetViewingCommit(b bool) { m.viewingCommit = b }
+
+// leftBlocksHeight is the total screen rows the extra blocks occupy.
+func (m *Model) leftBlocksHeight() int {
+	h := 0
+	for _, b := range m.leftBlocks {
+		if b == "" {
+			continue
+		}
+		h += strings.Count(b, "\n") + 1
+	}
+	return h
 }
 
 // SetHoverRow sets the visible-node index under the mouse pointer (-1 for none).
@@ -994,8 +1017,8 @@ func glyph(g Group, f git.ChangedFile) string {
 // View renders the file list beside the diff viewport plus a scrollbar. When the
 // list is hidden, the diff (plus scrollbar) fills the whole width.
 func (m *Model) View() string {
-	if m.IsClean() {
-		return m.renderCleanState()
+	if m.IsClean() && !m.viewingCommit {
+		return m.renderClean()
 	}
 
 	diff := m.renderDiff()
@@ -1004,13 +1027,25 @@ func (m *Model) View() string {
 		return lipgloss.JoinHorizontal(lipgloss.Top, diff, sb)
 	}
 
+	gap := styles.Divider.Render(verticalBar(m.totalHeight))
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderLeftColumn(), gap, diff, sb)
+}
+
+// renderLeftColumn builds the left column: the scrollable file list, the commit
+// affordance, and any stacked left blocks (the PR / Commits panels).
+func (m *Model) renderLeftColumn() string {
 	list := lipgloss.NewStyle().Width(m.listWidth).Height(m.listHeight()).Render(m.renderList())
 	leftCol := list
 	if m.commitBarVisible() {
 		leftCol = lipgloss.JoinVertical(lipgloss.Left, list, m.renderCommitBar())
 	}
-	gap := styles.Divider.Render(verticalBar(m.totalHeight))
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftCol, gap, diff, sb)
+	for _, b := range m.leftBlocks {
+		if b == "" {
+			continue
+		}
+		leftCol = lipgloss.JoinVertical(lipgloss.Left, leftCol, b)
+	}
+	return leftCol
 }
 
 // commitBarLines is the number of screen rows the commit affordance occupies at
@@ -1029,6 +1064,10 @@ func (m *Model) listHeight() int {
 	h := m.totalHeight
 	if m.commitBarVisible() {
 		h -= commitBarLines
+	}
+	h -= m.leftBlocksHeight()
+	if h < 1 {
+		h = 1
 	}
 	return h
 }
@@ -1063,13 +1102,31 @@ func (m *Model) renderCommitBar() string {
 	return rule + "\n" + line
 }
 
-// renderCleanState renders the friendly "working tree clean" empty state.
-func (m *Model) renderCleanState() string {
+// renderClean renders the friendly "working tree clean" empty state. When the
+// file-tree column is visible it is still drawn, so the PR / Commits blocks stay
+// usable, and the message fills the diff side; when the tree is hidden the
+// message is centered across the full width.
+func (m *Model) renderClean() string {
+	msg := m.cleanMessage()
+	if m.listHidden {
+		return lipgloss.Place(maxi(m.totalWidth, 1), maxi(m.totalHeight, 1),
+			lipgloss.Center, lipgloss.Center, msg)
+	}
+	gap := styles.Divider.Render(verticalBar(m.totalHeight))
+	rightWidth := m.totalWidth - m.listWidth - lipgloss.Width(gap)
+	if rightWidth < 1 {
+		rightWidth = 1
+	}
+	right := lipgloss.Place(rightWidth, maxi(m.totalHeight, 1),
+		lipgloss.Center, lipgloss.Center, msg)
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderLeftColumn(), gap, right)
+}
+
+// cleanMessage is the centered "all caught up" content for the clean state.
+func (m *Model) cleanMessage() string {
 	title := styles.GroupStaged.Render("✓ working tree clean")
 	hint := styles.Clean.Render("nothing to commit — you're all caught up")
-	msg := lipgloss.JoinVertical(lipgloss.Center, title, "", hint)
-	return lipgloss.Place(maxi(m.totalWidth, 1), maxi(m.totalHeight, 1),
-		lipgloss.Center, lipgloss.Center, msg)
+	return lipgloss.JoinVertical(lipgloss.Center, title, "", hint)
 }
 
 // renderScrollbar draws a one-column vertical scrollbar for the diff viewport: a

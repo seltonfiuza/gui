@@ -133,3 +133,28 @@ func TestDescriptionViewportScrolls(t *testing.T) {
 		t.Fatalf("after j YOffset = %d, want 1", got)
 	}
 }
+
+func TestOpenDetailShowsDetailLoadingNotList(t *testing.T) {
+	m := New()
+	m.OpenDetail("Pull Requests")
+	out := m.View(80, 24)
+	if strings.Contains(out, "n new") || strings.Contains(out, "enter open") {
+		t.Errorf("OpenDetail should show the detail view, not the list footer:\n%s", out)
+	}
+	if !strings.Contains(out, "loading…") {
+		t.Errorf("OpenDetail should show the detail loading state:\n%s", out)
+	}
+}
+
+func TestSetDetailAfterOpenDetailRendersDiff(t *testing.T) {
+	m := New()
+	m.OpenDetail("Pull Requests")
+	m.SetDetail(github.PR{Number: 7, Title: "My PR"}, "diff --git a/x b/x\n@@ -1 +1 @@\n+DIFF_MARKER\n")
+	out := m.View(80, 24)
+	if strings.Contains(out, "loading…") {
+		t.Errorf("loading state should clear after SetDetail:\n%s", out)
+	}
+	if !strings.Contains(out, "DIFF_MARKER") {
+		t.Errorf("detail diff should render after SetDetail:\n%s", out)
+	}
+}
