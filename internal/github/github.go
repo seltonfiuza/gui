@@ -175,6 +175,78 @@ func glabCreateArgs(repo *git.Remote, o CreatePROpts) []string {
 	return args
 }
 
+// errGitLabUnsupported is returned by approve/merge for GitLab remotes; the
+// glab path is a deliberate v1 seam (see CreatePR's gh/glab split).
+var errGitLabUnsupported = errors.New("approve/merge from gui is not yet supported for GitLab")
+
+// MergeMethod selects how `gh pr merge` integrates the PR.
+type MergeMethod int
+
+const (
+	MergeCommit MergeMethod = iota // --merge
+	Squash                         // --squash
+	Rebase                         // --rebase
+)
+
+// flag returns the gh merge-method flag for m.
+func (m MergeMethod) flag() string {
+	switch m {
+	case Squash:
+		return "--squash"
+	case Rebase:
+		return "--rebase"
+	default:
+		return "--merge"
+	}
+}
+
+// ApprovePR submits an approving review for the PR via `gh pr review`.
+func (s *Service) ApprovePR(repo *git.Remote, number int) error {
+	if repo == nil || repo.Owner == "" || repo.Repo == "" {
+		return errors.New("no origin remote configured")
+	}
+	if isGitLab(repo.Host) {
+		return errGitLabUnsupported
+	}
+	_, err := runCLI("gh", ghApproveArgs(repo, number)...)
+	return err
+}
+
+// MergePR merges the PR via `gh pr merge` using method, optionally deleting the
+// head branch.
+func (s *Service) MergePR(repo *git.Remote, number int, method MergeMethod, deleteBranch bool) error {
+	if repo == nil || repo.Owner == "" || repo.Repo == "" {
+		return errors.New("no origin remote configured")
+	}
+	if isGitLab(repo.Host) {
+		return errGitLabUnsupported
+	}
+	_, err := runCLI("gh", ghMergeArgs(repo, number, method, deleteBranch)...)
+	return err
+}
+
+// ghApproveArgs builds the `gh pr review --approve` argument list.
+func ghApproveArgs(repo *git.Remote, number int) []string {
+	return []string{
+		"pr", "review", strconv.Itoa(number),
+		"-R", prRepoArg(repo),
+		"--approve",
+	}
+}
+
+// ghMergeArgs builds the `gh pr merge` argument list.
+func ghMergeArgs(repo *git.Remote, number int, method MergeMethod, deleteBranch bool) []string {
+	args := []string{
+		"pr", "merge", strconv.Itoa(number),
+		"-R", prRepoArg(repo),
+		method.flag(),
+	}
+	if deleteBranch {
+		args = append(args, "--delete-branch")
+	}
+	return args
+}
+
 // prNumberFromURL extracts the trailing integer from a PR/MR URL, e.g.
 // ".../pull/42" or ".../merge_requests/7". Returns 0 when not parseable.
 func prNumberFromURL(url string) int {

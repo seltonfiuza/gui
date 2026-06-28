@@ -158,3 +158,126 @@ func TestSetDetailAfterOpenDetailRendersDiff(t *testing.T) {
 		t.Errorf("detail diff should render after SetDetail:\n%s", out)
 	}
 }
+
+func detailModel(pr github.PR) Model {
+	m := New()
+	m.SetDetail(pr, "") // puts the model in modeDetail; no sizing needed for key tests
+	return m
+}
+
+func TestApproveFlowEmitsIntent(t *testing.T) {
+	m := detailModel(github.PR{Number: 7, Title: "t", HeadRef: "feat"})
+	if intent, _ := m.Update(runeKey('a')); intent.Kind != IntentNone {
+		t.Fatalf("after 'a' kind = %v, want IntentNone (prompt open)", intent.Kind)
+	}
+	intent, _ := m.Update(runeKey('y'))
+	if intent.Kind != IntentApprove || intent.Number != 7 {
+		t.Fatalf("got %+v, want IntentApprove #7", intent)
+	}
+}
+
+func TestApproveEscCancels(t *testing.T) {
+	m := detailModel(github.PR{Number: 7})
+	m.Update(runeKey('a'))
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	// A following 'y' must NOT approve once cancelled.
+	if intent, _ := m.Update(runeKey('y')); intent.Kind == IntentApprove {
+		t.Fatal("approve fired after esc cancelled the prompt")
+	}
+}
+
+func TestMergeFlowSquashDeleteEmitsIntent(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m')) // open method chooser
+	m.Update(runeKey('2')) // squash
+	m.Update(runeKey('y')) // confirm
+	intent, _ := m.Update(runeKey('y')) // delete branch: yes
+	if intent.Kind != IntentMerge || intent.Number != 9 {
+		t.Fatalf("got %+v, want IntentMerge #9", intent)
+	}
+	if intent.Method != github.Squash {
+		t.Errorf("method = %v, want Squash", intent.Method)
+	}
+	if !intent.DeleteBranch {
+		t.Error("DeleteBranch = false, want true")
+	}
+}
+
+func TestMergeFlowMergeNoDelete(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m'))
+	m.Update(runeKey('1')) // merge commit
+	m.Update(runeKey('y')) // confirm
+	intent, _ := m.Update(runeKey('n')) // delete branch: no
+	if intent.Kind != IntentMerge {
+		t.Fatalf("kind = %v, want IntentMerge", intent.Kind)
+	}
+	if intent.Method != github.MergeCommit {
+		t.Errorf("method = %v, want MergeCommit", intent.Method)
+	}
+	if intent.DeleteBranch {
+		t.Error("DeleteBranch = true, want false")
+	}
+}
+
+func TestMergeMethodCursorEnter(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m'))
+	m.Update(runeKey('j'))             // cursor: merge commit -> squash
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(runeKey('y'))             // confirm
+	intent, _ := m.Update(runeKey('n')) // no delete
+	if intent.Kind != IntentMerge || intent.Method != github.Squash {
+		t.Fatalf("got %+v, want IntentMerge method Squash", intent)
+	}
+}
+
+func TestMergeEscCancels(t *testing.T) {
+	m := detailModel(github.PR{Number: 9})
+	m.Update(runeKey('m'))
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if intent, _ := m.Update(runeKey('1')); intent.Kind == IntentMerge {
+		t.Fatal("merge fired after esc cancelled the chooser")
+	}
+}
+
+func TestMergeFlowRebase(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m'))
+	m.Update(runeKey('3')) // rebase
+	m.Update(runeKey('y')) // confirm
+	intent, _ := m.Update(runeKey('n'))
+	if intent.Kind != IntentMerge || intent.Method != github.Rebase {
+		t.Fatalf("got %+v, want IntentMerge method Rebase", intent)
+	}
+}
+
+func TestMergeEscAtConfirm(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m'))
+	m.Update(runeKey('1'))
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // cancel at confirm
+	if intent, _ := m.Update(runeKey('y')); intent.Kind == IntentMerge {
+		t.Fatal("merge fired after esc cancelled at confirm")
+	}
+}
+
+func TestMergeEscAtDelete(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m'))
+	m.Update(runeKey('1'))
+	m.Update(runeKey('y'))                 // advance to delete-branch
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // cancel at delete
+	if intent, _ := m.Update(runeKey('y')); intent.Kind == IntentMerge {
+		t.Fatal("merge fired after esc cancelled at delete-branch")
+	}
+}
+
+func TestApproveBlockedWhileLoading(t *testing.T) {
+	m := New()
+	m.OpenDetail("Pull Requests") // detailLoading = true, no detail set
+	m.Update(runeKey('a'))
+	if intent, _ := m.Update(runeKey('y')); intent.Kind == IntentApprove {
+		t.Fatal("approve fired while detail still loading")
+	}
+}
