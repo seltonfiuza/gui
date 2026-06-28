@@ -1251,10 +1251,18 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		return a, nil
 	case config.ActDown:
 		a.diff.CursorDown()
-		return a, a.refreshDiffCmd()
+		// Only reload when the file SELECTION moved (list focus); scrolling the
+		// diff cursor needs no reload and must not clobber a shown commit diff.
+		if a.diff.Focus() == diffview.FocusList {
+			return a, a.refreshDiffCmd()
+		}
+		return a, nil
 	case config.ActUp:
 		a.diff.CursorUp()
-		return a, a.refreshDiffCmd()
+		if a.diff.Focus() == diffview.FocusList {
+			return a, a.refreshDiffCmd()
+		}
+		return a, nil
 	case config.ActConfirm:
 		// On a folder, enter/space toggles it; on a file, focus the diff pane so
 		// j/k move the line cursor.
@@ -1304,6 +1312,11 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 		a.diff.Collapse()
 		return a, a.refreshDiffCmd()
 	case config.ActExpand:
+		// → while scrolling a commit's diff stays in the commit view (it's
+		// already focused); don't leak to the working-tree file tree.
+		if a.viewingCommit && a.leftFocus == focusDiff {
+			return a, nil
+		}
 		a.setLeftFocus(focusFiles)
 		a.diff.Expand()
 		return a, a.refreshDiffCmd()

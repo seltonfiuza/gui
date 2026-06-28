@@ -1225,3 +1225,25 @@ func TestLeftArrowFromCommitDiffReturnsToCommits(t *testing.T) {
 		t.Error("← should keep the commit diff shown (viewingCommit stays true)")
 	}
 }
+
+func TestDownWhileScrollingCommitDiffDoesNotClobber(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	a.leftFocus = focusDiff
+	a.applyLeftFocus() // diff is now FocusDiff
+	a.dispatchAction(config.ActDown)
+	if !a.viewingCommit {
+		t.Error("↓ while scrolling a commit diff must not reload the working-tree file diff")
+	}
+}
+
+func TestRightWhileScrollingCommitDiffStaysInCommitView(t *testing.T) {
+	a := newTestApp()
+	a.viewingCommit = true
+	a.leftFocus = focusDiff
+	a.applyLeftFocus()
+	a.dispatchAction(config.ActExpand)
+	if !a.viewingCommit || a.leftFocus != focusDiff {
+		t.Errorf("→ while scrolling a commit diff should stay put (viewingCommit=%v leftFocus=%v)", a.viewingCommit, a.leftFocus)
+	}
+}
