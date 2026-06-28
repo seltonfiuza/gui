@@ -378,3 +378,16 @@ func TestBlameLineBinding(t *testing.T) {
 		t.Fatalf("actionByName[blame_line] = %v, want ActBlameLine", got)
 	}
 }
+
+func TestResolveEditFileKey(t *testing.T) {
+	d := NewDispatcher(DefaultKeymap())
+	if got := d.Resolve("e"); got != ActEditFile {
+		t.Fatalf("Resolve(e) = %v, want ActEditFile", got)
+	}
+	if name := actionNames[ActEditFile]; name != "edit_file" {
+		t.Fatalf("actionNames[ActEditFile] = %q, want edit_file", name)
+	}
+	if got := actionByName["edit_file"]; got != ActEditFile {
+		t.Fatalf("actionByName[edit_file] = %v, want ActEditFile", got)
+	}
+}
