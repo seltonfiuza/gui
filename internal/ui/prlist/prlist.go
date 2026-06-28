@@ -36,13 +36,20 @@ const (
 	IntentStartCreate
 	// IntentCreate asks the root to create a request from Opts.
 	IntentCreate
+	// IntentApprove asks the root to approve PR Number.
+	IntentApprove
+	// IntentMerge asks the root to merge PR Number via Method, deleting the head
+	// branch when DeleteBranch is set.
+	IntentMerge
 )
 
 // Intent is returned from Update for the root App to act on.
 type Intent struct {
-	Kind   IntentKind
-	Number int
-	Opts   github.CreatePROpts
+	Kind         IntentKind
+	Number       int
+	Opts         github.CreatePROpts
+	Method       github.MergeMethod
+	DeleteBranch bool
 }
 
 type mode int
@@ -72,6 +79,21 @@ const (
 	focusDesc
 )
 
+// promptStep is the active approve/merge prompt within the detail view.
+type promptStep int
+
+const (
+	promptNone promptStep = iota
+	promptApprove
+	promptMergeMethod
+	promptMergeConfirm
+	promptMergeDelete
+)
+
+// mergeMethods is the chooser order; methodLabels are their footer labels.
+var mergeMethods = []github.MergeMethod{github.MergeCommit, github.Squash, github.Rebase}
+var methodLabels = []string{"merge commit", "squash", "rebase"}
+
 // Model is the request overlay.
 type Model struct {
 	prs     []github.PR
@@ -97,6 +119,10 @@ type Model struct {
 	// description pane screen rect (PR-view-local coords), set during viewDetail,
 	// used for mouse-wheel hit-testing.
 	descRectX, descRectY, descRectW, descRectH int
+
+	prompt       promptStep
+	mergeMethod  github.MergeMethod
+	methodCursor int
 
 	md *mdrender.Renderer // memoized markdown renderer for the description
 
@@ -346,9 +372,19 @@ func (m *Model) syncCreateFocus() tea.Cmd {
 }
 
 func (m *Model) updateDetail(msg tea.KeyMsg) Intent {
+	if m.prompt != promptNone {
+		return m.updatePrompt(msg)
+	}
 	switch msg.String() {
 	case "esc", "q":
 		m.mode = modeList
+		return Intent{Kind: IntentNone}
+	case "a":
+		m.prompt = promptApprove
+		return Intent{Kind: IntentNone}
+	case "m":
+		m.prompt = promptMergeMethod
+		m.methodCursor = 0
 		return Intent{Kind: IntentNone}
 	case "tab":
 		if m.focus == focusDiff {
@@ -373,6 +409,94 @@ func (m *Model) updateDetail(msg tea.KeyMsg) Intent {
 		m.clampScroll()
 	}
 	return Intent{Kind: IntentNone}
+}
+
+// updatePrompt drives the approve/merge prompt sequence. esc cancels at any
+// step; the terminal steps return the IntentApprove / IntentMerge to the root.
+func (m *Model) updatePrompt(msg tea.KeyMsg) Intent {
+	key := msg.String()
+	if key == "esc" {
+		m.resetPrompt()
+		return Intent{Kind: IntentNone}
+	}
+	switch m.prompt {
+	case promptApprove:
+		switch key {
+		case "y":
+			n := m.detail.Number
+			m.resetPrompt()
+			return Intent{Kind: IntentApprove, Number: n}
+		case "n":
+			m.resetPrompt()
+		}
+	case promptMergeMethod:
+		switch key {
+		case "j", "down":
+			if m.methodCursor < len(mergeMethods)-1 {
+				m.methodCursor++
+			}
+		case "k", "up":
+			if m.methodCursor > 0 {
+				m.methodCursor--
+			}
+		case "1", "2", "3":
+			m.methodCursor = int(key[0] - '1')
+			m.mergeMethod = mergeMethods[m.methodCursor]
+			m.prompt = promptMergeConfirm
+		case "enter":
+			m.mergeMethod = mergeMethods[m.methodCursor]
+			m.prompt = promptMergeConfirm
+		}
+	case promptMergeConfirm:
+		switch key {
+		case "y":
+			m.prompt = promptMergeDelete
+		case "n":
+			m.resetPrompt()
+		}
+	case promptMergeDelete:
+		switch key {
+		case "y", "n":
+			n, method := m.detail.Number, m.mergeMethod
+			del := key == "y"
+			m.resetPrompt()
+			return Intent{Kind: IntentMerge, Number: n, Method: method, DeleteBranch: del}
+		}
+	}
+	return Intent{Kind: IntentNone}
+}
+
+// resetPrompt clears any active approve/merge prompt.
+func (m *Model) resetPrompt() {
+	m.prompt = promptNone
+	m.methodCursor = 0
+}
+
+// detailHint returns the footer line for the detail view: the idle key list,
+// or the active approve/merge prompt text.
+func (m *Model) detailHint() string {
+	switch m.prompt {
+	case promptApprove:
+		return fmt.Sprintf("Approve PR #%d? [y/n]", m.detail.Number)
+	case promptMergeMethod:
+		var b strings.Builder
+		b.WriteString("Merge method: ")
+		for i, label := range methodLabels {
+			if i == m.methodCursor {
+				b.WriteString("› " + label + "  ")
+			} else {
+				b.WriteString("  " + label + "  ")
+			}
+		}
+		b.WriteString(" (1/2/3, enter · esc cancel)")
+		return b.String()
+	case promptMergeConfirm:
+		return fmt.Sprintf("Merge PR #%d via %s? [y/n]", m.detail.Number, methodLabels[m.methodCursor])
+	case promptMergeDelete:
+		return fmt.Sprintf("Delete branch %s after merge? [y/n]", m.detail.HeadRef)
+	default:
+		return "tab switch pane · j/k scroll · ctrl+d/ctrl+u page · a approve · m merge · esc back"
+	}
 }
 
 // ScrollDescriptionAt scrolls the description viewport by delta lines when the
@@ -538,7 +662,7 @@ func (m *Model) viewDetail(width, height int) string {
 		return m.centered(width, height, styles.Inline.Render(m.detailErr))
 	}
 
-	hint := styles.Desc.Render("tab switch pane · j/k scroll · ctrl+d/ctrl+u page · esc back")
+	hint := styles.Desc.Render(m.detailHint())
 
 	const titleH, pipeH = 4, 4
 	region := height - titleH - 1 // panes row + 1 hint line
