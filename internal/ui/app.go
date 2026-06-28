@@ -1927,7 +1927,7 @@ func (a *App) footerHint() string {
 	if !a.autoRefresh {
 		auto = "off"
 	}
-	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · a/A stage/unstage all · C commit · p push · ctrl+p palette · r refresh · ctrl+t auto:" + auto + " · B branches · T theme · P prs · ? help · q quit"
+	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · e edit · ctrl+r recover · < > resize · s stage · a/A stage/unstage all · C commit · p push · ctrl+p palette · r refresh · ctrl+t auto:" + auto + " · B branches · T theme · P prs · ? help · q quit"
 }
 
 func (a *App) renderFooter() string {
