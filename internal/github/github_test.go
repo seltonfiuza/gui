@@ -94,3 +94,78 @@ func TestPRNumberFromURL(t *testing.T) {
 		}
 	}
 }
+
+func TestGhApproveArgs(t *testing.T) {
+	repo := &git.Remote{Owner: "o", Repo: "r", Host: "github.com"}
+	args := ghApproveArgs(repo, 42)
+	if args[0] != "pr" || args[1] != "review" {
+		t.Fatalf("args head = %v, want pr review", args[:2])
+	}
+	if !contains(args, "42") {
+		t.Errorf("number 42 missing from %v", args)
+	}
+	if pairAfter(args, "-R") != "github.com/o/r" {
+		t.Errorf("-R = %q, want github.com/o/r", pairAfter(args, "-R"))
+	}
+	if !contains(args, "--approve") {
+		t.Error("--approve missing")
+	}
+}
+
+func TestGhMergeArgsMethods(t *testing.T) {
+	repo := &git.Remote{Owner: "o", Repo: "r", Host: "github.com"}
+	cases := map[MergeMethod]string{
+		MergeCommit: "--merge",
+		Squash:      "--squash",
+		Rebase:      "--rebase",
+	}
+	for method, flag := range cases {
+		args := ghMergeArgs(repo, 7, method, false)
+		if args[0] != "pr" || args[1] != "merge" {
+			t.Fatalf("args head = %v, want pr merge", args[:2])
+		}
+		if !contains(args, "7") {
+			t.Errorf("number 7 missing from %v", args)
+		}
+		if !contains(args, flag) {
+			t.Errorf("method %d: %s missing from %v", method, flag, args)
+		}
+		if contains(args, "--delete-branch") {
+			t.Errorf("method %d: --delete-branch present when deleteBranch is false", method)
+		}
+	}
+}
+
+func TestGhMergeArgsDeleteBranch(t *testing.T) {
+	repo := &git.Remote{Owner: "o", Repo: "r", Host: "github.com"}
+	args := ghMergeArgs(repo, 7, Squash, true)
+	if !contains(args, "--delete-branch") {
+		t.Error("--delete-branch missing when deleteBranch is true")
+	}
+}
+
+func TestApprovePRGitLabUnsupported(t *testing.T) {
+	repo := &git.Remote{Owner: "o", Repo: "r", Host: "gitlab.com"}
+	err := New(HostForRemote(repo)).ApprovePR(repo, 1)
+	if err == nil {
+		t.Fatal("expected an error for a GitLab remote")
+	}
+}
+
+func TestMergePRGitLabUnsupported(t *testing.T) {
+	repo := &git.Remote{Owner: "o", Repo: "r", Host: "gitlab.com"}
+	err := New(HostForRemote(repo)).MergePR(repo, 1, Squash, false)
+	if err == nil {
+		t.Fatal("expected an error for a GitLab remote")
+	}
+}
+
+func TestApprovePRNoRemote(t *testing.T) {
+	if err := New(DefaultHost()).ApprovePR(nil, 1); err == nil {
+		t.Fatal("expected an error for a nil remote")
+	}
+	repo := &git.Remote{} // empty owner/repo
+	if err := New(DefaultHost()).MergePR(repo, 1, Squash, false); err == nil {
+		t.Fatal("expected an error for an empty remote")
+	}
+}
