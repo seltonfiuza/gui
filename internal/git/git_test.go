@@ -270,6 +270,33 @@ func TestStatusDetachedHead(t *testing.T) {
 	}
 }
 
+func TestStatusOID(t *testing.T) {
+	dir := newRepo(t)
+	svc, _ := Open(dir)
+	st, err := svc.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimSpace(runGit(t, dir, "rev-parse", "HEAD"))
+	if st.OID != want {
+		t.Errorf("OID = %q, want %q", st.OID, want)
+	}
+}
+
+func TestStatusOIDUnbornHead(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-b", "main")
+	svc, _ := Open(dir)
+	st, err := svc.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.OID != "(initial)" {
+		t.Errorf("OID = %q, want %q", st.OID, "(initial)")
+	}
+}
+
 func TestStageUnstageDiscardRoundTrip(t *testing.T) {
 	dir := newRepo(t)
 	svc, _ := Open(dir)

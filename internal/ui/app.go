@@ -79,17 +79,19 @@ type prDetailMsg struct {
 }
 
 type diffMsg struct {
-	path string
-	raw  string
-	err  error
+	path   string
+	staged bool
+	raw    string
+	err    error
 }
 
 // bgDiffMsg is a tick-driven diff fetch; it is applied with SetDiffPreserving so
 // an unchanged diff keeps the user's cursor/scroll.
 type bgDiffMsg struct {
-	path string
-	raw  string
-	err  error
+	path   string
+	staged bool
+	raw    string
+	err    error
 }
 
 type branchesMsg struct {
@@ -125,6 +127,13 @@ const (
 	originBranch
 	originDelete
 )
+
+// diffKey identifies a cached diff: a path plus whether it is the index
+// (staged) diff or the worktree (unstaged) diff.
+type diffKey struct {
+	path   string
+	staged bool
+}
 
 // App is the root Bubble Tea model.
 type App struct {
@@ -175,11 +184,25 @@ type App struct {
 	// a mutation that altered the file's content in place, e.g. a hunk discard).
 	forceDiffReload bool
 
+	// diffCache memoizes the unified diff for each (path, staged) pair so that
+	// navigating away from a file and back does not re-shell `git diff`. It is
+	// invalidated wholesale whenever the status fingerprint changes, since a
+	// working-tree or index change can alter any cached diff.
+	diffCache map[diffKey]string
+	// diffShownKey identifies the (path, staged) diff currently displayed, so a
+	// re-selection of the same path in a different group (staged vs unstaged)
+	// still reloads. The zero value matches no real file.
+	diffShownKey diffKey
+
 	// autoRefresh toggles the background polling tick (ctrl+t). Default on.
 	autoRefresh bool
 	// statusFP is the fingerprint of the last applied status; a tick whose
 	// fingerprint matches causes no re-render and no diff re-fetch.
 	statusFP string
+	// commitFP is the HEAD OID for which the commit log was last loaded. The log
+	// is re-read only when HEAD moves (commit/amend/checkout/rebase), not on every
+	// working-tree change — a working-tree edit cannot alter `git log` output.
+	commitFP string
 	// bgErrShown is set once a background-refresh error has been surfaced as a
 	// toast, so the same failure is not re-toasted on every subsequent tick. It
 	// is cleared on the next successful background status.
@@ -290,6 +313,7 @@ func New(repo *git.Service, version string) tea.Model {
 		autoRefresh: true,
 		version:     version,
 		toast:       toast,
+		diffCache:   make(map[diffKey]string),
 	}
 }
 
@@ -298,7 +322,9 @@ func New(repo *git.Service, version string) tea.Model {
 // with no button) are delivered to Update — the latter drives hover highlights.
 func (a *App) Init() tea.Cmd {
 	a.prPanel.SetPlaceholder("loading…")
-	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), a.loadCommitsCmd(), scheduleTick(), tea.EnableMouseAllMotion)
+	// Commits are loaded reactively off the first status (see maybeLoadCommitsCmd),
+	// keyed on HEAD's OID, so they are not eagerly fetched here.
+	return tea.Batch(a.loadStatusCmd(), a.loadRemoteCmd(), scheduleTick(), tea.EnableMouseAllMotion)
 }
 
 // ---- commands ----
@@ -375,6 +401,11 @@ func (a *App) handleBgStatus(msg bgStatusMsg) (tea.Model, tea.Cmd) {
 		return a, next
 	}
 
+	// The status changed, so a working-tree or index change may have altered any
+	// cached diff; drop the whole cache. (bgRefreshDiffCmd re-populates the
+	// currently selected file below.)
+	a.diffCache = make(map[diffKey]string)
+
 	// While an overlay or text input is open, never disturb the view: keep the
 	// raw status data current underneath, but defer reconciling the diff panel
 	// (selection/cursor/diff) until the overlay closes. We intentionally do NOT
@@ -388,7 +419,7 @@ func (a *App) handleBgStatus(msg bgStatusMsg) (tea.Model, tea.Cmd) {
 	a.status = msg.status
 	a.statusFP = fp
 	a.diff.SetStatus(msg.status)
-	return a, tea.Batch(next, a.bgRefreshDiffCmd(), a.loadCommitsCmd())
+	return a, tea.Batch(next, a.bgRefreshDiffCmd(), a.maybeLoadCommitsCmd(msg.status))
 }
 
 // bgRefreshDiffCmd re-fetches the selected file's diff for a background refresh.
@@ -408,7 +439,7 @@ func (a *App) bgRefreshDiffCmd() tea.Cmd {
 	staged := row.Group == diffview.GroupStaged
 	return func() tea.Msg {
 		raw, err := repo.Diff(path, staged)
-		return bgDiffMsg{path: path, raw: raw, err: err}
+		return bgDiffMsg{path: path, staged: staged, raw: raw, err: err}
 	}
 }
 
@@ -502,6 +533,18 @@ func (a *App) loadCommitsCmd() tea.Cmd {
 		cs, err := repo.Log(commitLogLimit)
 		return commitsMsg{commits: cs, err: err}
 	}
+}
+
+// maybeLoadCommitsCmd returns a commit-log fetch only when HEAD has moved since
+// the log was last loaded (tracked via commitFP). `git log` output depends only
+// on the commit graph reachable from HEAD, so a working-tree or index change
+// alone never warrants a re-read. Returns nil when no fetch is needed.
+func (a *App) maybeLoadCommitsCmd(s *git.Status) tea.Cmd {
+	if s == nil || s.OID == a.commitFP {
+		return nil
+	}
+	a.commitFP = s.OID
+	return a.loadCommitsCmd()
 }
 
 type commitDiffMsg struct {
@@ -632,7 +675,7 @@ func (a *App) loadDiffCmd(path string, staged bool) tea.Cmd {
 	repo := a.repo
 	return func() tea.Msg {
 		raw, err := repo.Diff(path, staged)
-		return diffMsg{path: path, raw: raw, err: err}
+		return diffMsg{path: path, staged: staged, raw: raw, err: err}
 	}
 }
 
@@ -693,8 +736,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.status = msg.status
 		a.statusFP = statusFingerprint(msg.status)
+		// A foreground status is only requested after a content-affecting op
+		// (commit, push, mutation, editor return); cached diffs may be stale.
+		a.diffCache = make(map[diffKey]string)
 		a.diff.SetStatus(msg.status)
-		return a, a.refreshDiffCmd()
+		return a, tea.Batch(a.refreshDiffCmd(), a.maybeLoadCommitsCmd(msg.status))
 
 	case tickMsg:
 		return a, a.handleTick()
@@ -786,7 +832,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.toast = "diff: " + msg.err.Error()
 			return a, nil
 		}
+		key := diffKey{path: msg.path, staged: msg.staged}
 		a.diff.SetDiff(msg.path, msg.raw)
+		a.diffCache[key] = msg.raw
+		a.diffShownKey = key
 		return a, nil
 
 	case bgDiffMsg:
@@ -803,7 +852,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Only apply if the selection still points at this path (it may have
 		// moved between the fetch firing and completing).
 		if a.diff.SelectedPath() == msg.path {
+			key := diffKey{path: msg.path, staged: msg.staged}
 			a.diff.SetDiffPreserving(msg.path, msg.raw)
+			a.diffCache[key] = msg.raw
+			a.diffShownKey = key
 		}
 		return a, nil
 
@@ -1426,18 +1478,31 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 // refreshDiffCmd loads the diff for the currently selected file if it differs
 // from what's shown.
 func (a *App) refreshDiffCmd() tea.Cmd {
+	// Leaving a commit view must re-show the working-tree diff even when the same
+	// file is still selected, so capture the prior state before clearing it.
+	wasCommit := a.viewingCommit
 	a.viewingCommit = false
 	a.diff.SetViewingCommit(false)
 	row, ok := a.diff.Selected()
 	if !ok {
 		return nil
 	}
-	if a.diff.DiffPath() == row.File.Path && !a.forceDiffReload {
+	key := diffKey{path: row.File.Path, staged: row.Group == diffview.GroupStaged}
+	if a.diffShownKey == key && !a.forceDiffReload && !wasCommit {
 		return nil
 	}
+	force := a.forceDiffReload
 	a.forceDiffReload = false
-	staged := row.Group == diffview.GroupStaged
-	return a.loadDiffCmd(row.File.Path, staged)
+	// Serve from cache unless a mutation may have changed the file in place
+	// (force): then the cached entry is stale and must be re-fetched.
+	if force {
+		delete(a.diffCache, key)
+	} else if raw, ok := a.diffCache[key]; ok {
+		a.diff.SetDiff(key.path, raw)
+		a.diffShownKey = key
+		return nil
+	}
+	return a.loadDiffCmd(key.path, key.staged)
 }
 
 func (a *App) stageToggleCmd() tea.Cmd {

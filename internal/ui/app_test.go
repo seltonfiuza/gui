@@ -1293,3 +1293,75 @@ func TestEditFileExistingFileReturnsCommand(t *testing.T) {
 		t.Fatalf("toast = %q, want empty", a.toast)
 	}
 }
+
+func TestMaybeLoadCommitsGatesByOID(t *testing.T) {
+	a := newTestApp()
+	s := &git.Status{OID: "abc"}
+	if cmd := a.maybeLoadCommitsCmd(s); cmd == nil {
+		t.Fatal("first OID should trigger a commit-log load")
+	}
+	if a.commitFP != "abc" {
+		t.Fatalf("commitFP = %q, want abc", a.commitFP)
+	}
+	if cmd := a.maybeLoadCommitsCmd(s); cmd != nil {
+		t.Fatal("unchanged OID must not reload the commit log")
+	}
+	if cmd := a.maybeLoadCommitsCmd(&git.Status{OID: "def"}); cmd == nil {
+		t.Fatal("moved HEAD (new OID) should reload the commit log")
+	}
+	if cmd := a.maybeLoadCommitsCmd(nil); cmd != nil {
+		t.Fatal("nil status must not load")
+	}
+}
+
+func TestDiffCacheSeparatesStagedFromUnstaged(t *testing.T) {
+	a := newTestApp()
+	a.Update(diffMsg{path: "x.go", staged: false, raw: "UNSTAGED"})
+	a.Update(diffMsg{path: "x.go", staged: true, raw: "STAGED"})
+	if got := a.diffCache[diffKey{path: "x.go", staged: false}]; got != "UNSTAGED" {
+		t.Fatalf("unstaged cache = %q, want UNSTAGED", got)
+	}
+	if got := a.diffCache[diffKey{path: "x.go", staged: true}]; got != "STAGED" {
+		t.Fatalf("staged cache = %q, want STAGED", got)
+	}
+}
+
+func TestRefreshDiffServesFromCacheWithoutFetch(t *testing.T) {
+	a := newTestApp()
+	sel, ok := a.diff.Selected()
+	if !ok {
+		t.Fatal("expected a selected file")
+	}
+	key := diffKey{path: sel.File.Path, staged: sel.Group == diffview.GroupStaged}
+	a.diffCache[key] = "CACHED"
+	// Pretend a different diff is currently shown so the cache branch is taken.
+	a.diffShownKey = diffKey{path: "other.go", staged: false}
+	if cmd := a.refreshDiffCmd(); cmd != nil {
+		t.Fatal("a cache hit must not shell out to git (nil cmd expected)")
+	}
+	if a.diff.DiffPath() != key.path {
+		t.Fatalf("DiffPath = %q, want %q", a.diff.DiffPath(), key.path)
+	}
+	if a.diffShownKey != key {
+		t.Fatalf("diffShownKey = %+v, want %+v", a.diffShownKey, key)
+	}
+}
+
+func TestRefreshDiffFetchesOnColdCache(t *testing.T) {
+	a := newTestApp()
+	if _, ok := a.diff.Selected(); !ok {
+		t.Fatal("expected a selected file")
+	}
+	if cmd := a.refreshDiffCmd(); cmd == nil {
+		t.Fatal("a cold cache must request a diff fetch (non-nil cmd)")
+	}
+}
+
+func TestStatusMsgClearsDiffCache(t *testing.T) {
+	a := newTestApp()
+	a.diffCache[diffKey{path: "stale.go", staged: false}] = "OLD"
+	a.Update(statusMsg{status: &git.Status{Branch: "main", OID: "abc"}})
+	if len(a.diffCache) != 0 {
+		t.Fatalf("statusMsg should clear the diff cache, have %d entries", len(a.diffCache))
+	}
+}
