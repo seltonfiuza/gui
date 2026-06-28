@@ -81,17 +81,18 @@ type Model struct {
 
 	focus Focus
 
-	vp          viewport.Model
-	vpReady     bool
-	diffPath    string   // path the viewport content currently belongs to
-	diffRaw     string   // raw (uncolorized) diff text for the loaded path
-	diffLines   []string // strings.Split(diffRaw, "\n") — the RAW cursor index space
-	cleaned     cleanedDiff
-	styledLines []string // per-rendered-row colorized cache (parallel to cleaned.lines)
-	hunks       []git.Hunk
-	lineCursor  int  // 0-based index into diffLines (RAW space; matches git.ParseHunks)
-	prevCursor  int  // last RAW cursor whose highlight is reflected in styledLines
-	rawMode     bool // when true, show the unfiltered raw diff (toggle)
+	vp            viewport.Model
+	vpReady       bool
+	diffPath      string   // path the viewport content currently belongs to
+	viewingCommit bool     // app is showing a historical commit diff; suppress the clean-state message
+	diffRaw       string   // raw (uncolorized) diff text for the loaded path
+	diffLines     []string // strings.Split(diffRaw, "\n") — the RAW cursor index space
+	cleaned       cleanedDiff
+	styledLines   []string // per-rendered-row colorized cache (parallel to cleaned.lines)
+	hunks         []git.Hunk
+	lineCursor    int  // 0-based index into diffLines (RAW space; matches git.ParseHunks)
+	prevCursor    int  // last RAW cursor whose highlight is reflected in styledLines
+	rawMode       bool // when true, show the unfiltered raw diff (toggle)
 
 	listWidth   int
 	totalWidth  int
@@ -126,6 +127,10 @@ func (m *Model) CommitBarHeight() int {
 // SetLeftBlocks sets extra pre-rendered blocks stacked beneath the commit bar in
 // the left column. Each string should already be sized to listWidth.
 func (m *Model) SetLeftBlocks(blocks []string) { m.leftBlocks = blocks }
+
+// SetViewingCommit tells the view a historical commit diff is being shown, so
+// the clean-working-tree message does not hide it.
+func (m *Model) SetViewingCommit(b bool) { m.viewingCommit = b }
 
 // leftBlocksHeight is the total screen rows the extra blocks occupy.
 func (m *Model) leftBlocksHeight() int {
@@ -1012,7 +1017,7 @@ func glyph(g Group, f git.ChangedFile) string {
 // View renders the file list beside the diff viewport plus a scrollbar. When the
 // list is hidden, the diff (plus scrollbar) fills the whole width.
 func (m *Model) View() string {
-	if m.IsClean() {
+	if m.IsClean() && !m.viewingCommit {
 		return m.renderClean()
 	}
 

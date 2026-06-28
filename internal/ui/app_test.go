@@ -1070,6 +1070,16 @@ func TestEnterOnCommitLoadsCommitDiffIntoPane(t *testing.T) {
 	}
 }
 
+func TestCommitDiffMsgSetsDiffViewViewingCommit(t *testing.T) {
+	a := newTestApp()
+	a.Update(commitDiffMsg{sha: "deadbeef", raw: "diff --git a/x b/x\n+content\n"})
+	// After loading a commit diff, the diff view must know it is showing a commit
+	// so it won't hide it on a clean tree.
+	if !a.viewingCommit {
+		t.Fatal("expected a.viewingCommit true")
+	}
+}
+
 func TestEnterOnPROpensPRView(t *testing.T) {
 	a := newTestApp()
 	a.prPanel.SetPRs([]github.PR{{Number: 13, Title: "x"}})

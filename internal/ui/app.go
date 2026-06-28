@@ -735,6 +735,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.viewingCommit = true
 		a.diff.SetDiff("commit "+shortSHA(msg.sha), msg.raw)
+		a.diff.SetViewingCommit(true)
 		return a, nil
 
 	case prDetailMsg:
@@ -1369,6 +1370,7 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 // from what's shown.
 func (a *App) refreshDiffCmd() tea.Cmd {
 	a.viewingCommit = false
+	a.diff.SetViewingCommit(false)
 	row, ok := a.diff.Selected()
 	if !ok {
 		return nil
