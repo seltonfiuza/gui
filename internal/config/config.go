@@ -59,6 +59,9 @@ const (
 	ActCommandPalette // ctrl+p: open the fuzzy command palette (search all commands)
 	// Appended for git blame. Keep at the end.
 	ActBlameLine // b: show git blame for the line under the diff cursor
+
+	// Appended for the editor handoff. Keep at the end.
+	ActEditFile // e: open the selected file in $EDITOR (full-screen handoff)
 )
 
 // actionNames maps each Action to its stable config name (used in config.yaml
@@ -98,6 +101,7 @@ var actionNames = map[Action]string{
 	ActPush:              "push",
 	ActCommandPalette:    "command_palette",
 	ActBlameLine:         "blame_line",
+	ActEditFile:          "edit_file",
 }
 
 // actionByName is the reverse of actionNames, built once at package load via an IIFE.
@@ -159,6 +163,7 @@ func DefaultKeymap() Keymap {
 			"P":      ActPRList,
 			"p":      ActPush,
 			"b":      ActBlameLine,
+			"e":      ActEditFile,
 			"ctrl+p": ActCommandPalette,
 			"esc":    ActCancel,
 		},
@@ -202,6 +207,7 @@ var bindingOrder = []struct {
 	{ActBranchPanel, "Open branch panel"},
 	{ActThemePicker, "Open theme picker (live preview)"},
 	{ActPRList, "Open merge/pull request list"},
+	{ActEditFile, "Edit the selected file in $EDITOR"},
 	{ActHelp, "Toggle help overlay"},
 	{ActCancel, "Cancel / close overlay"},
 	{ActQuit, "Quit"},

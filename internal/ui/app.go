@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -100,6 +101,12 @@ type branchesMsg struct {
 // the user asks to quit (FR-4: warn before quitting mid-operation).
 type quitCheckMsg struct {
 	inProgress bool
+}
+
+// editorFinishedMsg is delivered when the external editor opened by
+// ActEditFile exits. It carries any process error and triggers a refresh.
+type editorFinishedMsg struct {
+	err error
 }
 
 // mutationDoneMsg is emitted after a stage/unstage/discard/checkout/etc.
@@ -856,6 +863,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, tea.Quit
 
+	case editorFinishedMsg:
+		if msg.err != nil {
+			a.toast = "editor exited with error"
+		}
+		// The file may have changed on disk; force the diff to reload and
+		// refresh the working-tree status so edits show immediately.
+		a.forceDiffReload = true
+		// tea.ExecProcess releases the terminal (disabling mouse input), and
+		// Bubble Tea's RestoreTerminal only re-enables alt-screen/paste/focus —
+		// not mouse tracking — so we must explicitly re-arm it here.
+		return a, tea.Batch(a.loadStatusCmd(), a.refreshDiffCmd(), tea.EnableMouseAllMotion)
+
 	case tea.MouseMsg:
 		return a.handleMouse(msg)
 
@@ -1334,6 +1353,25 @@ func (a *App) dispatchAction(action config.Action) (tea.Model, tea.Cmd) {
 	case config.ActHunkPrev:
 		a.diff.HunkPrev()
 		return a, nil
+	case config.ActEditFile:
+		row, ok := a.diff.Selected()
+		if !ok {
+			a.toast = "nothing to edit"
+			return a, nil
+		}
+		abs := filepath.Join(a.repo.Root(), row.File.Path)
+		if _, err := os.Stat(abs); err != nil {
+			a.toast = "nothing to edit — file is gone"
+			return a, nil
+		}
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			editor = "vim"
+		}
+		a.toast = ""
+		return a, tea.ExecProcess(exec.Command(editor, abs), func(err error) tea.Msg {
+			return editorFinishedMsg{err: err}
+		})
 	case config.ActBlameLine:
 		if a.diff.Focus() != diffview.FocusDiff {
 			a.toast = "blame: focus the diff first"
@@ -1892,7 +1930,7 @@ func (a *App) footerHint() string {
 	if !a.autoRefresh {
 		auto = "off"
 	}
-	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · ctrl+r recover · < > resize · s stage · a/A stage/unstage all · C commit · p push · ctrl+p palette · r refresh · ctrl+t auto:" + auto + " · B branches · T theme · P prs · ? help · q quit"
+	return "j/k move · tab focus · enter open · h/l fold · . flat · E hide tree · u hunk · U file · e edit · ctrl+r recover · < > resize · s stage · a/A stage/unstage all · C commit · p push · ctrl+p palette · r refresh · ctrl+t auto:" + auto + " · B branches · T theme · P prs · ? help · q quit"
 }
 
 func (a *App) renderFooter() string {
