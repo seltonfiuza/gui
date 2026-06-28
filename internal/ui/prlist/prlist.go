@@ -380,9 +380,15 @@ func (m *Model) updateDetail(msg tea.KeyMsg) Intent {
 		m.mode = modeList
 		return Intent{Kind: IntentNone}
 	case "a":
+		if m.detailLoading || m.detail.Number == 0 {
+			return Intent{Kind: IntentNone}
+		}
 		m.prompt = promptApprove
 		return Intent{Kind: IntentNone}
 	case "m":
+		if m.detailLoading || m.detail.Number == 0 {
+			return Intent{Kind: IntentNone}
+		}
 		m.prompt = promptMergeMethod
 		m.methodCursor = 0
 		return Intent{Kind: IntentNone}
@@ -470,6 +476,7 @@ func (m *Model) updatePrompt(msg tea.KeyMsg) Intent {
 func (m *Model) resetPrompt() {
 	m.prompt = promptNone
 	m.methodCursor = 0
+	m.mergeMethod = github.MergeCommit
 }
 
 // detailHint returns the footer line for the detail view: the idle key list,

@@ -1359,3 +1359,22 @@ func TestPrMergeDoneError(t *testing.T) {
 		t.Errorf("toast = %q, want merge: not mergeable", a.toast)
 	}
 }
+
+func TestPrApproveDoneError(t *testing.T) {
+	a := prDetailApp(7)
+	_, cmd := a.Update(prApproveDoneMsg{number: 7, err: errors.New("not authorized")})
+	if !strings.Contains(a.toast, "approve: not authorized") {
+		t.Errorf("toast = %q, want approve: not authorized", a.toast)
+	}
+	if cmd != nil {
+		t.Error("approve error should not return a command (detail stays open)")
+	}
+}
+
+func TestPrMergeDoneErrorReturnsNilCmd(t *testing.T) {
+	a := prDetailApp(7)
+	_, cmd := a.Update(prMergeDoneMsg{number: 7, err: errors.New("not mergeable")})
+	if cmd != nil {
+		t.Error("merge error should not return a command (detail stays open)")
+	}
+}

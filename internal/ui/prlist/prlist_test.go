@@ -240,3 +240,44 @@ func TestMergeEscCancels(t *testing.T) {
 		t.Fatal("merge fired after esc cancelled the chooser")
 	}
 }
+
+func TestMergeFlowRebase(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m'))
+	m.Update(runeKey('3')) // rebase
+	m.Update(runeKey('y')) // confirm
+	intent, _ := m.Update(runeKey('n'))
+	if intent.Kind != IntentMerge || intent.Method != github.Rebase {
+		t.Fatalf("got %+v, want IntentMerge method Rebase", intent)
+	}
+}
+
+func TestMergeEscAtConfirm(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m'))
+	m.Update(runeKey('1'))
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // cancel at confirm
+	if intent, _ := m.Update(runeKey('y')); intent.Kind == IntentMerge {
+		t.Fatal("merge fired after esc cancelled at confirm")
+	}
+}
+
+func TestMergeEscAtDelete(t *testing.T) {
+	m := detailModel(github.PR{Number: 9, HeadRef: "feat"})
+	m.Update(runeKey('m'))
+	m.Update(runeKey('1'))
+	m.Update(runeKey('y'))                 // advance to delete-branch
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc}) // cancel at delete
+	if intent, _ := m.Update(runeKey('y')); intent.Kind == IntentMerge {
+		t.Fatal("merge fired after esc cancelled at delete-branch")
+	}
+}
+
+func TestApproveBlockedWhileLoading(t *testing.T) {
+	m := New()
+	m.OpenDetail("Pull Requests") // detailLoading = true, no detail set
+	m.Update(runeKey('a'))
+	if intent, _ := m.Update(runeKey('y')); intent.Kind == IntentApprove {
+		t.Fatal("approve fired while detail still loading")
+	}
+}

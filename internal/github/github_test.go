@@ -1,6 +1,7 @@
 package github
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/seltonfiuza/gui/internal/git"
@@ -147,16 +148,16 @@ func TestGhMergeArgsDeleteBranch(t *testing.T) {
 func TestApprovePRGitLabUnsupported(t *testing.T) {
 	repo := &git.Remote{Owner: "o", Repo: "r", Host: "gitlab.com"}
 	err := New(HostForRemote(repo)).ApprovePR(repo, 1)
-	if err == nil {
-		t.Fatal("expected an error for a GitLab remote")
+	if !errors.Is(err, errGitLabUnsupported) {
+		t.Fatalf("expected errGitLabUnsupported, got %v", err)
 	}
 }
 
 func TestMergePRGitLabUnsupported(t *testing.T) {
 	repo := &git.Remote{Owner: "o", Repo: "r", Host: "gitlab.com"}
 	err := New(HostForRemote(repo)).MergePR(repo, 1, Squash, false)
-	if err == nil {
-		t.Fatal("expected an error for a GitLab remote")
+	if !errors.Is(err, errGitLabUnsupported) {
+		t.Fatalf("expected errGitLabUnsupported, got %v", err)
 	}
 }
 
